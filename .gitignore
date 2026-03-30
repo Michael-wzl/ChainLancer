@@ -39,5 +39,8 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Lock files (optional — remove this line if you want to commit lock files)
+# Lock files
 # package-lock.json
+
+# Others
+*.pdf
