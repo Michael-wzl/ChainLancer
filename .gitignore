@@ -1,0 +1,43 @@
+# Build outputs
+artifacts/
+cache/
+typechain-types/
+frontend/dist/
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Hardhat coverage
+coverage/
+coverage.json
+
+# Secrets / credentials
+JWT.txt
+
+# Screenshots & debug assets
+test-screenshots/
+*.png
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Misc / junk drawer
+trash/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Lock files (optional — remove this line if you want to commit lock files)
+# package-lock.json
