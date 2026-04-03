@@ -78,9 +78,7 @@ export default function Wallet() {
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Wallet</h1>
-        <p className="text-sm text-gray-500 font-mono">
-          {address}
-        </p>
+        <p className="text-sm text-gray-500 font-mono">{address}</p>
       </div>
 
       {/* Balances */}

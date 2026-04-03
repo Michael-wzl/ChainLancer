@@ -7,6 +7,7 @@ import {
   User,
   Wallet as WalletIcon,
   Search,
+  HammerIcon,
 } from "lucide-react";
 import { ConnectButton } from "../wallet/ConnectButton";
 import { NetworkBadge } from "../wallet/NetworkBadge";
@@ -17,19 +18,27 @@ const NAV_ITEMS = [
   { to: "/post-job", label: "Post Job", icon: PlusCircle },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
+  { to: "/judge", label: "Judge", icon: HammerIcon },
 ];
 
-export function Navbar() {
-  const location = useLocation();
+type NavbarProps = {
+  appName: string;
+};
 
+export function Navbar({ appName }: NavbarProps) {
+  const location = useLocation();
   return (
     <nav className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2">
-            <img src="/chainlancer-logo.svg" alt="ChainLancer" className="h-8 w-8" />
-            <span className="text-lg font-bold text-gray-900">ChainLancer</span>
+            <img
+              src="/chainlancer-logo.svg"
+              alt="ChainLancer Logo"
+              className="h-8 w-8"
+            />
+            <span className="text-lg font-bold text-gray-900">{appName}</span>
           </Link>
 
           {/* Navigation Links */}

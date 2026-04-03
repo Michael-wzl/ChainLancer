@@ -39,7 +39,13 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
   // Write contracts (with signer)
   const contracts = useMemo<ContractInstances>(() => {
     if (!signer || !isConnected || !isCorrectNetwork) {
-      return { jobEscrow: null, dispute: null, reputation: null, dataAvailability: null, mockUSDC: null };
+      return {
+        jobEscrow: null,
+        dispute: null,
+        reputation: null,
+        dataAvailability: null,
+        mockUSDC: null,
+      };
     }
 
     try {
@@ -54,7 +60,11 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
           ? new ethers.Contract(addresses.Reputation, ReputationABI, signer)
           : null,
         dataAvailability: addresses.DataAvailability
-          ? new ethers.Contract(addresses.DataAvailability, DataAvailabilityABI, signer)
+          ? new ethers.Contract(
+              addresses.DataAvailability,
+              DataAvailabilityABI,
+              signer,
+            )
           : null,
         mockUSDC: addresses.MockUSDC
           ? new ethers.Contract(addresses.MockUSDC, MockUSDCABI, signer)
@@ -62,7 +72,13 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
       };
     } catch (err) {
       console.error("Failed to create contract instances:", err);
-      return { jobEscrow: null, dispute: null, reputation: null, dataAvailability: null, mockUSDC: null };
+      return {
+        jobEscrow: null,
+        dispute: null,
+        reputation: null,
+        dataAvailability: null,
+        mockUSDC: null,
+      };
     }
   }, [signer, isConnected, isCorrectNetwork, addresses]);
 
@@ -86,10 +102,18 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
           ? new ethers.Contract(addresses.Dispute, DisputeABI, readProvider)
           : null,
         reputation: addresses.Reputation
-          ? new ethers.Contract(addresses.Reputation, ReputationABI, readProvider)
+          ? new ethers.Contract(
+              addresses.Reputation,
+              ReputationABI,
+              readProvider,
+            )
           : null,
         dataAvailability: addresses.DataAvailability
-          ? new ethers.Contract(addresses.DataAvailability, DataAvailabilityABI, readProvider)
+          ? new ethers.Contract(
+              addresses.DataAvailability,
+              DataAvailabilityABI,
+              readProvider,
+            )
           : null,
         mockUSDC: addresses.MockUSDC
           ? new ethers.Contract(addresses.MockUSDC, MockUSDCABI, readProvider)
@@ -97,7 +121,13 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
       };
     } catch (err) {
       console.error("Failed to create read contracts:", err);
-      return { jobEscrow: null, dispute: null, reputation: null, dataAvailability: null, mockUSDC: null };
+      return {
+        jobEscrow: null,
+        dispute: null,
+        reputation: null,
+        dataAvailability: null,
+        mockUSDC: null,
+      };
     }
   }, [provider, fallbackProvider, addresses]);
 

@@ -15,7 +15,7 @@ const PINATA_JWT = () => import.meta.env.VITE_PINATA_JWT || "";
  */
 export async function uploadJSON(
   data: unknown,
-  name?: string
+  name?: string,
 ): Promise<string> {
   const jwt = PINATA_JWT();
   if (!jwt) {
@@ -38,7 +38,7 @@ export async function uploadJSON(
         Authorization: `Bearer ${jwt}`,
       },
       body,
-    }
+    },
   );
 
   if (!response.ok) {
@@ -56,7 +56,7 @@ export async function uploadJSON(
  */
 export async function uploadFile(
   file: File | Blob,
-  name?: string
+  name?: string,
 ): Promise<string> {
   const jwt = PINATA_JWT();
   if (!jwt) {
@@ -67,7 +67,7 @@ export async function uploadFile(
   formData.append("file", file, name || `chainlancer-${Date.now()}`);
   formData.append(
     "pinataMetadata",
-    JSON.stringify({ name: name || `chainlancer-file-${Date.now()}` })
+    JSON.stringify({ name: name || `chainlancer-file-${Date.now()}` }),
   );
 
   const response = await fetch(
@@ -78,12 +78,14 @@ export async function uploadFile(
         Authorization: `Bearer ${jwt}`,
       },
       body: formData,
-    }
+    },
   );
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Pinata file upload failed: ${response.status} — ${errText}`);
+    throw new Error(
+      `Pinata file upload failed: ${response.status} — ${errText}`,
+    );
   }
 
   const result = await response.json();
