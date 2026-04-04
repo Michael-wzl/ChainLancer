@@ -139,7 +139,7 @@ export function useJobDetail(jobId: number | null) {
 
 async function fetchSingleJob(
   contract: import("ethers").Contract,
-  jobId: number
+  jobId: number,
 ): Promise<JobData | null> {
   try {
     const info = await contract.getJobInfo(jobId);

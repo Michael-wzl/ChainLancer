@@ -10,6 +10,6 @@
     "outDir": "./dist",
     "sourceMap": true
   },
-  "include": ["./scripts", "./test", "./hardhat.config.ts"],
-  "files": ["./hardhat.config.ts"]
+  "include": ["./scripts", "./test", "hardhat.config.cjs"],
+  "files": ["hardhat.config.cjs"]
 }

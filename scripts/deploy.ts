@@ -5,7 +5,8 @@ async function main() {
   console.log("Deploying contracts with account:", deployer.address);
 
   const treasuryAddress = process.env.TREASURY_ADDRESS || deployer.address;
-  const platformAdminAddress = process.env.PLATFORM_ADMIN_ADDRESS || deployer.address;
+  const platformAdminAddress =
+    process.env.PLATFORM_ADMIN_ADDRESS || deployer.address;
 
   // ── Role constants ──
   const ESCROW_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ESCROW_ROLE"));
@@ -52,7 +53,7 @@ async function main() {
     disputeAddress,
     reputationAddress,
     dataAvailabilityAddress,
-    treasuryAddress
+    treasuryAddress,
   );
   await jobEscrow.waitForDeployment();
   const jobEscrowAddress = await jobEscrow.getAddress();
@@ -98,6 +99,14 @@ async function main() {
   console.log("JobEscrow:         ", jobEscrowAddress);
   console.log("Treasury:          ", treasuryAddress);
   console.log("Platform Admin:    ", platformAdminAddress);
+
+  // ── Print in .env style for Vite ──
+  console.log("\n── VITE ENV VARIABLES ──");
+  console.log(`VITE_MOCK_USDC_ADDRESS=${usdcAddress}`);
+  console.log(`VITE_JOB_ESCROW_ADDRESS=${jobEscrowAddress}`);
+  console.log(`VITE_DISPUTE_ADDRESS=${disputeAddress}`);
+  console.log(`VITE_REPUTATION_ADDRESS=${reputationAddress}`);
+  console.log(`VITE_DATA_AVAILABILITY_ADDRESS=${dataAvailabilityAddress}`);
 }
 
 main()

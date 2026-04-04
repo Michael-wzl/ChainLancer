@@ -24,6 +24,9 @@ import {
   BEHAVIOR_BOND_BPS,
 } from "../config/constants";
 
+import { Wallet as WalletIcon } from "lucide-react";
+import { NotebookPen as PostJobIcon } from "lucide-react";
+
 interface MilestoneInput {
   description: string;
   value: string;
@@ -41,7 +44,9 @@ export default function PostJob() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [requirements, setRequirements] = useState("");
-  const [reviewTimeout, setReviewTimeout] = useState(REVIEW_TIMEOUT_OPTIONS[2].value); // 7 days default
+  const [reviewTimeout, setReviewTimeout] = useState(
+    REVIEW_TIMEOUT_OPTIONS[2].value,
+  ); // 7 days default
   const [milestones, setMilestones] = useState<MilestoneInput[]>([
     { description: "Milestone 1", value: "1000", deadlineDays: "30" },
   ]);
@@ -56,7 +61,8 @@ export default function PostJob() {
   }, 0n);
 
   const behaviorBond = (totalValue * BigInt(BEHAVIOR_BOND_BPS.New)) / 10000n;
-  const freelancerDeposit = (totalValue * BigInt(FREELANCER_DEPOSIT_BPS)) / 10000n;
+  const freelancerDeposit =
+    (totalValue * BigInt(FREELANCER_DEPOSIT_BPS)) / 10000n;
   const totalRequired = totalValue + behaviorBond;
 
   // ─── Milestone management ───
@@ -76,157 +82,182 @@ export default function PostJob() {
     setMilestones(milestones.filter((_, i) => i !== idx));
   };
 
-  const updateMilestone = (idx: number, field: keyof MilestoneInput, val: string) => {
+  const updateMilestone = (
+    idx: number,
+    field: keyof MilestoneInput,
+    val: string,
+  ) => {
     const updated = [...milestones];
     updated[idx] = { ...updated[idx], [field]: val };
     setMilestones(updated);
   };
 
   // ─── Submit ───
-  const handleSubmit = useCallback(
-    async () => {
-      if (!address) {
-        toast.error("Please connect your wallet first.");
-        return;
-      }
+  const handleSubmit = useCallback(async () => {
+    if (!address) {
+      toast.error("Please connect your wallet first.");
+      return;
+    }
 
-      // Validate
-      if (!title.trim()) {
-        toast.error("Please provide a job title.");
-        return;
-      }
-      if (milestones.some((ms) => !ms.value || parseUSDC(ms.value) === 0n)) {
-        toast.error("All milestones must have a value greater than 0.");
-        return;
-      }
+    // Validate
+    if (!title.trim()) {
+      toast.error("Please provide a job title.");
+      return;
+    }
+    if (milestones.some((ms) => !ms.value || parseUSDC(ms.value) === 0n)) {
+      toast.error("All milestones must have a value greater than 0.");
+      return;
+    }
 
-      try {
-        // 1) Generate job key + salt
-        const jobKeyHex = await generateJobKey();
-        const saltHex = generateSalt();
+    try {
+      // 1) Generate job key + salt
+      const jobKeyHex = await generateJobKey();
+      const saltHex = generateSalt();
 
-        // 2) Build agreement document
-        const agreement = {
-          title,
-          description,
-          requirements,
-          milestones: milestones.map((ms, i) => ({
-            index: i,
-            description: ms.description,
-            value: ms.value,
-            deadlineDays: ms.deadlineDays,
-          })),
-          reviewTimeout,
-          postedBy: address,
-          timestamp: Date.now(),
-        };
+      // 2) Build agreement document
+      const agreement = {
+        title,
+        description,
+        requirements,
+        milestones: milestones.map((ms, i) => ({
+          index: i,
+          description: ms.description,
+          value: ms.value,
+          deadlineDays: ms.deadlineDays,
+        })),
+        reviewTimeout,
+        postedBy: address,
+        timestamp: Date.now(),
+      };
 
-        const agreementText = JSON.stringify(agreement);
+      const agreementText = JSON.stringify(agreement);
 
-        // 3) Compute agreement hash (salt || plaintext)
-        const agreementHash = computeAgreementHash(saltHex, agreementText);
+      // 3) Compute agreement hash (salt || plaintext)
+      const agreementHash = computeAgreementHash(saltHex, agreementText);
 
-        // 4) Encrypt the agreement
-        const encryptedBytes = await encrypt(agreementText, jobKeyHex);
+      // 4) Encrypt the agreement
+      const encryptedBytes = await encrypt(agreementText, jobKeyHex);
 
-        // 5) Upload encrypted agreement (binary) + salt metadata to IPFS
-        const encryptedBlob = new Blob([encryptedBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
-        const agreementCID = await uploadFile(
-          encryptedBlob,
-          `job-agreement-${Date.now()}`
-        );
+      // 5) Upload encrypted agreement (binary) + salt metadata to IPFS
+      const encryptedBlob = new Blob([encryptedBytes.buffer as ArrayBuffer], {
+        type: "application/octet-stream",
+      });
+      const agreementCID = await uploadFile(
+        encryptedBlob,
+        `job-agreement-${Date.now()}`,
+      );
 
-        // Also upload the salt as a small JSON sidecar
-        await uploadJSON(
-          { salt: saltHex },
-          `job-salt-${Date.now()}`
-        );
-        toast.success("Agreement uploaded to IPFS!");
+      // Also upload the salt as a small JSON sidecar
+      await uploadJSON({ salt: saltHex }, `job-salt-${Date.now()}`);
+      toast.success("Agreement uploaded to IPFS!");
 
-        // 6) Prepare on-chain params
-        const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
-        const now = Math.floor(Date.now() / 1000);
-        const milestoneDeadlines = milestones.map(
-          (ms) => now + Number(ms.deadlineDays) * 86400
-        );
+      // 6) Prepare on-chain params
+      const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
+      const now = Math.floor(Date.now() / 1000);
+      const milestoneDeadlines = milestones.map(
+        (ms) => now + Number(ms.deadlineDays) * 86400,
+      );
 
-        // Bug #3 fix: Check USDC balance and allowance before posting
-        if (contracts.mockUSDC) {
-          const contractAddresses = getContractAddresses();
-          const balance = await contracts.mockUSDC.balanceOf(address);
-          if (balance < totalRequired) {
-            toast.error(
-              `Insufficient USDC balance. You have ${formatUSDC(balance)} but need ${formatUSDC(totalRequired)}. Visit the Wallet page to mint USDC.`
-            );
-            return;
-          }
-          const allowance = await contracts.mockUSDC.allowance(address, contractAddresses.JobEscrow);
-          if (allowance < totalRequired) {
-            toast.error(
-              `Insufficient USDC allowance. Please click "Approve USDC" first to allow JobEscrow to spend your USDC.`
-            );
-            return;
-          }
+      // Bug #3 fix: Check USDC balance and allowance before posting
+      if (contracts.mockUSDC) {
+        const contractAddresses = getContractAddresses();
+        const balance = await contracts.mockUSDC.balanceOf(address);
+        if (balance < totalRequired) {
+          toast.error(
+            `Insufficient USDC balance. You have ${formatUSDC(
+              balance,
+            )} but need ${formatUSDC(
+              totalRequired,
+            )}. Visit the Wallet page to mint USDC.`,
+          );
+          return;
         }
-
-        // 7) Post the job on-chain
-        const { receipt } = await postJob(
-          agreementHash,
-          milestoneValues,
-          milestoneDeadlines,
-          reviewTimeout,
-          agreementCID
+        const allowance = await contracts.mockUSDC.allowance(
+          address,
+          contractAddresses.JobEscrow,
         );
-
-        // 8) Extract jobId from events using ethers Interface
-        let jobId: number | null = null;
-        if (receipt?.logs) {
-          const iface = new ethers.Interface(JobEscrowABI);
-          for (const log of receipt.logs) {
-            try {
-              const parsed = iface.parseLog({ topics: log.topics as string[], data: log.data });
-              if (parsed && parsed.name === "JobPosted") {
-                jobId = Number(parsed.args.jobId);
-                break;
-              }
-            } catch {
-              // skip non-matching logs
-            }
-          }
+        if (allowance < totalRequired) {
+          toast.error(
+            `Insufficient USDC allowance. Please click "Approve USDC" first to allow JobEscrow to spend your USDC.`,
+          );
+          return;
         }
+      }
 
-        // Fallback: query nextJobId and subtract 1
-        if (jobId === null && contracts.jobEscrow) {
+      // 7) Post the job on-chain
+      const { receipt } = await postJob(
+        agreementHash,
+        milestoneValues,
+        milestoneDeadlines,
+        reviewTimeout,
+        agreementCID,
+      );
+
+      // 8) Extract jobId from events using ethers Interface
+      let jobId: number | null = null;
+      if (receipt?.logs) {
+        const iface = new ethers.Interface(JobEscrowABI);
+        for (const log of receipt.logs) {
           try {
-            const nextId = await contracts.jobEscrow.nextJobId();
-            jobId = Number(nextId) - 1;
+            const parsed = iface.parseLog({
+              topics: log.topics as string[],
+              data: log.data,
+            });
+            if (parsed && parsed.name === "JobPosted") {
+              jobId = Number(parsed.args.jobId);
+              break;
+            }
           } catch {
-            // last resort — should not happen
-            console.error("Failed to determine jobId");
+            // skip non-matching logs
           }
         }
-
-        // 9) Store the job key + title locally
-        if (jobId !== null) {
-          storeJobKey(jobId, jobKeyHex);
-          storeJobTitle(jobId, title);
-          toast.success(`Job #${jobId} created! Key saved locally.`);
-        } else {
-          toast.success("Job created! Could not determine job ID for key storage.");
-        }
-
-        navigate(jobId !== null ? `/job/${jobId}` : "/");
-      } catch (err) {
-        console.error("PostJob error:", err);
       }
-    },
-    [address, title, description, requirements, milestones, reviewTimeout, postJob, navigate, contracts.jobEscrow]
-  );
+
+      // Fallback: query nextJobId and subtract 1
+      if (jobId === null && contracts.jobEscrow) {
+        try {
+          const nextId = await contracts.jobEscrow.nextJobId();
+          jobId = Number(nextId) - 1;
+        } catch {
+          // last resort — should not happen
+          console.error("Failed to determine jobId");
+        }
+      }
+
+      // 9) Store the job key + title locally
+      if (jobId !== null) {
+        storeJobKey(jobId, jobKeyHex);
+        storeJobTitle(jobId, title);
+        toast.success(`Job #${jobId} created! Key saved locally.`);
+      } else {
+        toast.success(
+          "Job created! Could not determine job ID for key storage.",
+        );
+      }
+
+      navigate(jobId !== null ? `/job/${jobId}` : "/");
+    } catch (err) {
+      console.error("PostJob error:", err);
+    }
+  }, [
+    address,
+    title,
+    description,
+    requirements,
+    milestones,
+    reviewTimeout,
+    postJob,
+    navigate,
+    contracts.jobEscrow,
+  ]);
 
   if (!isConnected) {
     return (
-      <div className="text-center py-20 text-gray-400">
-        Please connect your wallet to post a job.
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <PostJobIcon className="h-16 w-16 text-gray-300 mb-4" />
+        <h2 className="text-xl font-semibold text-gray-600">
+          Please connect your wallet to post a job.
+        </h2>
       </div>
     );
   }
@@ -332,7 +363,9 @@ export default function PostJob() {
                     <input
                       type="text"
                       value={ms.value}
-                      onChange={(e) => updateMilestone(idx, "value", e.target.value)}
+                      onChange={(e) =>
+                        updateMilestone(idx, "value", e.target.value)
+                      }
                       placeholder="1000"
                       className="input"
                       required

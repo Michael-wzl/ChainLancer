@@ -1,6 +1,12 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Briefcase, PlusCircle, DollarSign, AlertTriangle, Award } from "lucide-react";
+import {
+  Briefcase,
+  PlusCircle,
+  DollarSign,
+  AlertTriangle,
+  Award,
+} from "lucide-react";
 import { useWallet } from "../contexts/WalletContext";
 import { useJobList } from "../hooks/useJobList";
 import { useUserReputation } from "../hooks/useReputation";
@@ -10,18 +16,26 @@ import { FaucetPanel } from "../components/testnet/FaucetPanel";
 import { JobState } from "../config/constants";
 import { formatUSDC } from "../utils/format";
 
-export default function Dashboard() {
+type DashboardProps = {
+  appName: string;
+};
+
+export default function Dashboard({ appName }: DashboardProps) {
   const { address, isConnected } = useWallet();
   const { jobs, loading } = useJobList();
-  const { freelancerProfile, clientProfile, clientTier, loading: repLoading } =
-    useUserReputation(address);
+  const {
+    freelancerProfile,
+    clientProfile,
+    clientTier,
+    loading: repLoading,
+  } = useUserReputation(address);
 
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <Briefcase className="h-16 w-16 text-gray-300 mb-4" />
         <h2 className="text-2xl font-bold text-gray-700 mb-2">
-          Welcome to ChainLancer
+          Welcome to {appName} Dashboard
         </h2>
         <p className="text-gray-500 max-w-md mb-6">
           Decentralized freelance escrow platform. Connect your wallet to get
@@ -32,15 +46,17 @@ export default function Dashboard() {
   }
 
   const myClientJobs = jobs.filter(
-    (j) => j.client.toLowerCase() === address?.toLowerCase()
+    (j) => j.client.toLowerCase() === address?.toLowerCase(),
   );
   const myFreelancerJobs = jobs.filter(
-    (j) => j.freelancer.toLowerCase() === address?.toLowerCase()
+    (j) => j.freelancer.toLowerCase() === address?.toLowerCase(),
   );
   const activeJobs = [...myClientJobs, ...myFreelancerJobs].filter(
-    (j) => j.state === JobState.Active
+    (j) => j.state === JobState.Active,
   );
-  const openJobs = myClientJobs.filter((j) => j.state === JobState.Open || j.state === JobState.Applications);
+  const openJobs = myClientJobs.filter(
+    (j) => j.state === JobState.Open || j.state === JobState.Applications,
+  );
 
   return (
     <div className="space-y-8">
@@ -49,7 +65,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-sm text-gray-500">
-            Overview of your ChainLancer activity
+            Overview of your {appName} activity
           </p>
         </div>
         <Link to="/post-job" className="btn-primary flex items-center gap-2">
@@ -69,7 +85,7 @@ export default function Dashboard() {
           label="Total Value Completed"
           value={formatUSDC(
             (freelancerProfile?.totalValueCompleted ?? 0n) +
-              (clientProfile?.totalValueCompleted ?? 0n)
+              (clientProfile?.totalValueCompleted ?? 0n),
           )}
         />
         <StatCard
@@ -77,7 +93,7 @@ export default function Dashboard() {
           label="Disputes Lost"
           value={String(
             (freelancerProfile?.disputesLost ?? 0) +
-              (clientProfile?.disputesLost ?? 0)
+              (clientProfile?.disputesLost ?? 0),
           )}
         />
         <StatCard
@@ -99,8 +115,15 @@ export default function Dashboard() {
           <p className="text-sm text-gray-400">Loading...</p>
         ) : activeJobs.length === 0 ? (
           <div className="card text-center py-8 text-gray-400 text-sm">
-            No active jobs. <Link to="/browse" className="text-brand-600 underline">Browse jobs</Link> or{" "}
-            <Link to="/post-job" className="text-brand-600 underline">post a new one</Link>.
+            No active jobs.{" "}
+            <Link to="/browse" className="text-brand-600 underline">
+              Browse jobs
+            </Link>{" "}
+            or{" "}
+            <Link to="/post-job" className="text-brand-600 underline">
+              post a new one
+            </Link>
+            .
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
