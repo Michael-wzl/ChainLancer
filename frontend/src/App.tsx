@@ -12,6 +12,7 @@ import ApplyJob from "./pages/ApplyJob";
 import DisputeDetail from "./pages/DisputeDetail";
 import Profile from "./pages/Profile";
 import Wallet from "./pages/Wallet";
+import Admin from "./pages/Admin";
 
 function NotFound() {
   return (
@@ -58,6 +59,7 @@ export default function App() {
               <Route path="/profile" element={<Profile />} />
               <Route path="/profile/:address" element={<Profile />} />
               <Route path="/wallet" element={<Wallet />} />
+              <Route path="/admin" element={<Admin />} />
               <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>

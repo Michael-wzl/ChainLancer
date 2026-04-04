@@ -7,6 +7,7 @@ import {
   User,
   Wallet as WalletIcon,
   Search,
+  Shield,
 } from "lucide-react";
 import { ConnectButton } from "../wallet/ConnectButton";
 import { NetworkBadge } from "../wallet/NetworkBadge";
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { to: "/post-job", label: "Post Job", icon: PlusCircle },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
+  { to: "/admin", label: "Admin", icon: Shield },
 ];
 
 export function Navbar() {
@@ -41,11 +43,10 @@ export function Navbar() {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                    isActive
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isActive
                       ? "bg-brand-50 text-brand-700"
                       : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                  }`}
+                    }`}
                 >
                   <Icon className="h-4 w-4" />
                   {item.label}
@@ -72,11 +73,10 @@ export function Navbar() {
               <Link
                 key={item.to}
                 to={item.to}
-                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium ${
-                  isActive
+                className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium ${isActive
                     ? "bg-brand-50 text-brand-700"
                     : "text-gray-500 hover:bg-gray-100"
-                }`}
+                  }`}
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}
