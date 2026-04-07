@@ -180,18 +180,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "DISCONNECT" });
         localStorage.removeItem("chainlancer_connected");
       } else {
-        dispatch({ type: "ACCOUNTS_CHANGED", address: accounts[0] });
-        // Re-establish signer
-        if (state.provider) {
-          const signer = await state.provider.getSigner();
-          const network = await state.provider.getNetwork();
+        // Create a fresh provider and signer for the new account.
+        // Using state.provider from the closure can be stale and may
+        // return the old signer, so we always re-create from window.ethereum.
+        try {
+          const freshProvider = new ethers.BrowserProvider(window.ethereum!);
+          const signer = await freshProvider.getSigner();
+          const address = await signer.getAddress();
+          const network = await freshProvider.getNetwork();
           dispatch({
             type: "CONNECT_SUCCESS",
-            address: accounts[0],
+            address,
             chainId: Number(network.chainId),
-            provider: state.provider,
+            provider: freshProvider,
             signer,
           });
+        } catch (err) {
+          console.error("Failed to re-establish signer after account switch:", err);
+          dispatch({ type: "ACCOUNTS_CHANGED", address: accounts[0] });
         }
       }
     };

@@ -1,38 +1,39 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_usdc",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_dispute",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_reputation",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_dataAvailability",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_treasury",
-        "type": "address"
-      }
-    ],
+    "inputs": [],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
   {
     "inputs": [],
     "name": "AccessControlBadConfirmation",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint48",
+        "name": "schedule",
+        "type": "uint48"
+      }
+    ],
+    "name": "AccessControlEnforcedDefaultAdminDelay",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AccessControlEnforcedDefaultAdminRules",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "defaultAdmin",
+        "type": "address"
+      }
+    ],
+    "name": "AccessControlInvalidDefaultAdmin",
     "type": "error"
   },
   {
@@ -52,6 +53,93 @@
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "target",
+        "type": "address"
+      }
+    ],
+    "name": "AddressEmptyCode",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyApplied",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyConfirmed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyProcessed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadySelected",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ArrayMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "CancelAlreadyPending",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "CancelWhileOffer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DeadlineInPast",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DeadlineNotPassed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DeadlinePassed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DepositSlashExceedsCap",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ERC1967InvalidImplementation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ERC1967NonPayable",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyAgreement",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "EnforcedPause",
     "type": "error"
@@ -63,7 +151,158 @@
   },
   {
     "inputs": [],
+    "name": "FailedCall",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidInitialization",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidMilestone",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidPubkeyLen",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidState",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidTimeout",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MaxAppsReached",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MilestoneNotPending",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MsBelowMinimum",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MsInReviewOrDisputed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NoMilestones",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NoOffer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NoPendingCancel",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotApplicant",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotDisputed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotExpiredYet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotInReview",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotInitializing",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotParty",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotSelected",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NothingToWithdraw",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OfferNotExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyClient",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyCounterparty",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyFreelancer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PendingOffer",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PrevNotExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "ReentrancyGuardReentrantCall",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint8",
+        "name": "bits",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "SafeCastOverflowedUintDowncast",
     "type": "error"
   },
   {
@@ -75,6 +314,47 @@
       }
     ],
     "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StakeWindowExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TimeoutNotExpired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TooManyMilestones",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "UUPSUnauthorizedCallContext",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "slot",
+        "type": "bytes32"
+      }
+    ],
+    "name": "UUPSUnsupportedProxiableUUID",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroTotalValue",
     "type": "error"
   },
   {
@@ -97,6 +377,12 @@
         "internalType": "bytes32",
         "name": "proposalHash",
         "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "proposalCID",
+        "type": "string"
       }
     ],
     "name": "ApplicationSubmitted",
@@ -138,6 +424,87 @@
       }
     ],
     "name": "CancellationRequested",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [],
+    "name": "DefaultAdminDelayChangeCanceled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint48",
+        "name": "newDelay",
+        "type": "uint48"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint48",
+        "name": "effectSchedule",
+        "type": "uint48"
+      }
+    ],
+    "name": "DefaultAdminDelayChangeScheduled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [],
+    "name": "DefaultAdminTransferCanceled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newAdmin",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint48",
+        "name": "acceptSchedule",
+        "type": "uint48"
+      }
+    ],
+    "name": "DefaultAdminTransferScheduled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "milestoneIdx",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "DisputeFeeDistributed",
     "type": "event"
   },
   {
@@ -210,6 +577,25 @@
         "internalType": "address",
         "name": "freelancer",
         "type": "address"
+      }
+    ],
+    "name": "FreelancerDeselected",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "freelancer",
+        "type": "address"
       },
       {
         "indexed": false,
@@ -238,6 +624,19 @@
       }
     ],
     "name": "FundsWithdrawn",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "version",
+        "type": "uint64"
+      }
+    ],
+    "name": "Initialized",
     "type": "event"
   },
   {
@@ -490,6 +889,25 @@
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "pubKey",
+        "type": "bytes"
+      }
+    ],
+    "name": "PublicKeyRegistered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "bytes32",
         "name": "role",
         "type": "bytes32"
@@ -574,69 +992,17 @@
     "type": "event"
   },
   {
-    "inputs": [],
-    "name": "BEHAVIOR_BOND_BRONZE_BPS",
-    "outputs": [
+    "anonymous": false,
+    "inputs": [
       {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "BEHAVIOR_BOND_GOLD_BPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "BEHAVIOR_BOND_NEW_BPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "BEHAVIOR_BOND_SILVER_BPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "BOND_SLASH_MAX_BPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
+    "name": "Upgraded",
+    "type": "event"
   },
   {
     "inputs": [],
@@ -666,7 +1032,7 @@
   },
   {
     "inputs": [],
-    "name": "FREELANCER_DEPOSIT_BPS",
+    "name": "MAX_APPLICATIONS_PER_JOB",
     "outputs": [
       {
         "internalType": "uint256",
@@ -730,6 +1096,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "UPGRADE_INTERFACE_VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -738,6 +1117,13 @@
       }
     ],
     "name": "acceptCancellation",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "acceptDefaultAdminTransfer",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -753,6 +1139,11 @@
         "internalType": "bytes32",
         "name": "proposalHash",
         "type": "bytes32"
+      },
+      {
+        "internalType": "string",
+        "name": "proposalCID",
+        "type": "string"
       }
     ],
     "name": "applyForJob",
@@ -774,6 +1165,26 @@
       }
     ],
     "name": "approveMilestone",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newAdmin",
+        "type": "address"
+      }
+    ],
+    "name": "beginDefaultAdminTransfer",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "cancelDefaultAdminTransfer",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -823,6 +1234,19 @@
   {
     "inputs": [
       {
+        "internalType": "uint48",
+        "name": "newDelay",
+        "type": "uint48"
+      }
+    ],
+    "name": "changeDefaultAdminDelay",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
         "name": "jobId",
         "type": "uint256"
@@ -866,6 +1290,45 @@
   },
   {
     "inputs": [],
+    "name": "defaultAdmin",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "defaultAdminDelay",
+    "outputs": [
+      {
+        "internalType": "uint48",
+        "name": "",
+        "type": "uint48"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "defaultAdminDelayIncreaseWait",
+    "outputs": [
+      {
+        "internalType": "uint48",
+        "name": "",
+        "type": "uint48"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "dispute",
     "outputs": [
       {
@@ -879,6 +1342,11 @@
   },
   {
     "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      },
       {
         "internalType": "uint256",
         "name": "",
@@ -902,6 +1370,11 @@
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "name": "disputeIds",
@@ -921,6 +1394,11 @@
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "name": "disputeInitiators",
@@ -929,6 +1407,25 @@
         "internalType": "address",
         "name": "",
         "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "encryptionPubKeys",
+    "outputs": [
+      {
+        "internalType": "bytes",
+        "name": "",
+        "type": "bytes"
       }
     ],
     "stateMutability": "view",
@@ -1020,6 +1517,11 @@
             "internalType": "bytes32",
             "name": "proposalHash",
             "type": "bytes32"
+          },
+          {
+            "internalType": "string",
+            "name": "proposalCID",
+            "type": "string"
           },
           {
             "internalType": "uint256",
@@ -1151,11 +1653,6 @@
             "type": "uint256"
           },
           {
-            "internalType": "uint256",
-            "name": "remainingReviewTime",
-            "type": "uint256"
-          },
-          {
             "internalType": "bytes32",
             "name": "deliverableHash",
             "type": "bytes32"
@@ -1243,6 +1740,49 @@
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_usdc",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_dispute",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_reputation",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_dataAvailability",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_treasury",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "initialAdmin",
+        "type": "address"
+      },
+      {
+        "internalType": "uint48",
+        "name": "adminTransferDelay",
+        "type": "uint48"
+      }
+    ],
+    "name": "initialize",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1354,6 +1894,19 @@
   },
   {
     "inputs": [],
+    "name": "owner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "pause",
     "outputs": [],
     "stateMutability": "nonpayable",
@@ -1367,6 +1920,42 @@
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pendingDefaultAdmin",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "newAdmin",
+        "type": "address"
+      },
+      {
+        "internalType": "uint48",
+        "name": "schedule",
+        "type": "uint48"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pendingDefaultAdminDelay",
+    "outputs": [
+      {
+        "internalType": "uint48",
+        "name": "newDelay",
+        "type": "uint48"
+      },
+      {
+        "internalType": "uint48",
+        "name": "schedule",
+        "type": "uint48"
       }
     ],
     "stateMutability": "view",
@@ -1412,6 +2001,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "proxiableUUID",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -1425,6 +2027,19 @@
       }
     ],
     "name": "raiseDispute",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes",
+        "name": "pubKey",
+        "type": "bytes"
+      }
+    ],
+    "name": "registerEncryptionKey",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1451,7 +2066,7 @@
       },
       {
         "internalType": "address",
-        "name": "callerConfirmation",
+        "name": "account",
         "type": "address"
       }
     ],
@@ -1523,6 +2138,13 @@
       }
     ],
     "name": "revokeRole",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "rollbackDefaultAdminDelay",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1633,6 +2255,24 @@
     "name": "unpause",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newImplementation",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "data",
+        "type": "bytes"
+      }
+    ],
+    "name": "upgradeToAndCall",
+    "outputs": [],
+    "stateMutability": "payable",
     "type": "function"
   },
   {

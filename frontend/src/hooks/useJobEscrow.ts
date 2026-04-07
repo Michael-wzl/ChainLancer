@@ -58,10 +58,10 @@ export function useJobEscrow() {
   );
 
   const applyForJob = useCallback(
-    async (jobId: number, proposalHash: string) => {
+    async (jobId: number, proposalHash: string, proposalCID: string) => {
       if (!contracts.jobEscrow) throw new Error("Contract not ready");
       return execute(
-        () => contracts.jobEscrow!.applyForJob(jobId, proposalHash),
+        () => contracts.jobEscrow!.applyForJob(jobId, proposalHash, proposalCID),
         "Application submitted!"
       );
     },
@@ -231,6 +231,29 @@ export function useJobEscrow() {
     [contracts.jobEscrow, execute]
   );
 
+  const reselectFreelancer = useCallback(
+    async (jobId: number, newFreelancerAddr: string, encryptedKey: Uint8Array) => {
+      if (!contracts.jobEscrow) throw new Error("Contract not ready");
+      return execute(
+        () =>
+          contracts.jobEscrow!.reselectFreelancer(jobId, newFreelancerAddr, encryptedKey),
+        "Freelancer reselected!"
+      );
+    },
+    [contracts.jobEscrow, execute]
+  );
+
+  const registerEncryptionKey = useCallback(
+    async (pubKeyHex: string) => {
+      if (!contracts.jobEscrow) throw new Error("Contract not ready");
+      return execute(
+        () => contracts.jobEscrow!.registerEncryptionKey(pubKeyHex),
+        "Encryption key registered!"
+      );
+    },
+    [contracts.jobEscrow, execute]
+  );
+
   return {
     isLoading,
     address,
@@ -250,5 +273,7 @@ export function useJobEscrow() {
     claimAbandonment,
     withdrawExpiredJob,
     expireOffer,
+    reselectFreelancer,
+    registerEncryptionKey,
   };
 }

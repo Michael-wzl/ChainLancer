@@ -41,8 +41,11 @@ describe("config/constants", () => {
       expect(PROTOCOL_FEE_BPS).toBe(200);
     });
 
-    it("should have correct freelancer deposit (5%)", () => {
-      expect(FREELANCER_DEPOSIT_BPS).toBe(500);
+    it("should have correct freelancer deposit BPS per tier", () => {
+      expect(FREELANCER_DEPOSIT_BPS.New).toBe(750);
+      expect(FREELANCER_DEPOSIT_BPS.Bronze).toBe(500);
+      expect(FREELANCER_DEPOSIT_BPS.Silver).toBe(250);
+      expect(FREELANCER_DEPOSIT_BPS.Gold).toBe(100);
     });
 
     it("should have correct behavior bond BPS per tier", () => {

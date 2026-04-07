@@ -6,6 +6,7 @@ export interface FreelancerProfile {
   totalValueCompleted: bigint;
   jobsCompleted: number;
   disputesLost: number;
+  cancellations: number;
   reputationScore: bigint;
 }
 
@@ -16,6 +17,7 @@ export interface ClientProfile {
   jobsCancelledAfterSelection: number;
   autoApproveCount: number;
   disputesLost: number;
+  totalMilestoneCount: number;
   reputationScore: bigint;
 }
 
@@ -31,7 +33,8 @@ export function useReputation() {
           totalValueCompleted: result[0],
           jobsCompleted: Number(result[1]),
           disputesLost: Number(result[2]),
-          reputationScore: result[3],
+          cancellations: Number(result[3]),
+          reputationScore: result[4],
         };
       } catch {
         return null;
@@ -52,7 +55,8 @@ export function useReputation() {
           jobsCancelledAfterSelection: Number(result[3]),
           autoApproveCount: Number(result[4]),
           disputesLost: Number(result[5]),
-          reputationScore: result[6],
+          totalMilestoneCount: Number(result[6]),
+          reputationScore: result[7],
         };
       } catch {
         return null;

@@ -7,13 +7,17 @@ import { useWallet } from "../contexts/WalletContext";
 import { useContracts } from "../contexts/ContractContext";
 import { useJobEscrow } from "../hooks/useJobEscrow";
 import { useMockUSDC } from "../hooks/useMockUSDC";
+import { useReputation } from "../hooks/useReputation";
 import { TransactionButton } from "../components/common/TransactionButton";
-import { generateJobKey, generateSalt } from "../crypto/jobKey";
+import { generateJobKey, generateSalt, bufferToHex } from "../crypto/jobKey";
 import { encrypt } from "../crypto/aes";
 import { computeAgreementHash } from "../crypto/hash";
-import { uploadFile, uploadJSON } from "../ipfs/pinata";
+import { recoverPublicKey } from "../crypto/ecies";
+import { uploadFile } from "../ipfs/pinata";
+import { parseContractError } from "../utils/errors";
 import { storeJobKey } from "../utils/storage";
 import { storeJobTitle } from "../utils/storage";
+import { getBlockTimestamp } from "../hooks/useBlockTimestamp";
 import { parseUSDC, formatUSDC } from "../utils/format";
 import { getContractAddresses } from "../config/contracts";
 import JobEscrowABI from "../abis/JobEscrow.json";
@@ -22,6 +26,7 @@ import {
   PROTOCOL_FEE_BPS,
   FREELANCER_DEPOSIT_BPS,
   BEHAVIOR_BOND_BPS,
+  Tier,
 } from "../config/constants";
 
 import { Wallet as WalletIcon } from "lucide-react";
@@ -37,8 +42,17 @@ export default function PostJob() {
   const navigate = useNavigate();
   const { address, isConnected } = useWallet();
   const { contracts } = useContracts();
-  const { postJob, isLoading } = useJobEscrow();
+  const { postJob, registerEncryptionKey, isLoading } = useJobEscrow();
   const { approveJobEscrow, isLoading: approveLoading } = useMockUSDC();
+  const { getClientTier } = useReputation();
+
+  // ─── Client tier for bond calculation ───
+  const [clientTier, setClientTier] = useState<Tier>(Tier.New);
+  React.useEffect(() => {
+    if (address) {
+      getClientTier(address).then(setClientTier);
+    }
+  }, [address, getClientTier]);
 
   // ─── Form state ───
   const [title, setTitle] = useState("");
@@ -60,9 +74,12 @@ export default function PostJob() {
     }
   }, 0n);
 
-  const behaviorBond = (totalValue * BigInt(BEHAVIOR_BOND_BPS.New)) / 10000n;
+  const tierKey = (["New", "Bronze", "Silver", "Gold"] as const)[clientTier];
+  const bondBps = BEHAVIOR_BOND_BPS[tierKey];
+  const behaviorBond = (totalValue * BigInt(bondBps)) / 10000n;
+  const freelancerDepositBps = FREELANCER_DEPOSIT_BPS["New"];
   const freelancerDeposit =
-    (totalValue * BigInt(FREELANCER_DEPOSIT_BPS)) / 10000n;
+    (totalValue * BigInt(freelancerDepositBps)) / 10000n;
   const totalRequired = totalValue + behaviorBond;
 
   // ─── Milestone management ───
@@ -110,6 +127,17 @@ export default function PostJob() {
     }
 
     try {
+      // 0) Ensure our encryption public key is registered on-chain
+      if (contracts.jobEscrow) {
+        const myPubKeyHex = await recoverPublicKey();
+        const existingPubKey = await contracts.jobEscrow.encryptionPubKeys(address);
+        if (!existingPubKey || existingPubKey === "0x" || existingPubKey.toLowerCase() !== myPubKeyHex.toLowerCase()) {
+          toast.loading("Registering encryption key…", { id: "regkey" });
+          await registerEncryptionKey(myPubKeyHex);
+          toast.success("Encryption key registered!", { id: "regkey" });
+        }
+      }
+
       // 1) Generate job key + salt
       const jobKeyHex = await generateJobKey();
       const saltHex = generateSalt();
@@ -138,27 +166,7 @@ export default function PostJob() {
       // 4) Encrypt the agreement
       const encryptedBytes = await encrypt(agreementText, jobKeyHex);
 
-      // 5) Upload encrypted agreement (binary) + salt metadata to IPFS
-      const encryptedBlob = new Blob([encryptedBytes.buffer as ArrayBuffer], {
-        type: "application/octet-stream",
-      });
-      const agreementCID = await uploadFile(
-        encryptedBlob,
-        `job-agreement-${Date.now()}`,
-      );
-
-      // Also upload the salt as a small JSON sidecar
-      await uploadJSON({ salt: saltHex }, `job-salt-${Date.now()}`);
-      toast.success("Agreement uploaded to IPFS!");
-
-      // 6) Prepare on-chain params
-      const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
-      const now = Math.floor(Date.now() / 1000);
-      const milestoneDeadlines = milestones.map(
-        (ms) => now + Number(ms.deadlineDays) * 86400,
-      );
-
-      // Bug #3 fix: Check USDC balance and allowance before posting
+      // 5) Check USDC balance and allowance BEFORE uploading to IPFS
       if (contracts.mockUSDC) {
         const contractAddresses = getContractAddresses();
         const balance = await contracts.mockUSDC.balanceOf(address);
@@ -168,7 +176,7 @@ export default function PostJob() {
               balance,
             )} but need ${formatUSDC(
               totalRequired,
-            )}. Visit the Wallet page to mint USDC.`,
+            )}. Visit the Wallet page to get test USDC.`,
           );
           return;
         }
@@ -184,7 +192,67 @@ export default function PostJob() {
         }
       }
 
-      // 7) Post the job on-chain
+      // 6) Prepare on-chain params
+      const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
+      // BUG FIX: Use blockchain time instead of Date.now() so that
+      // deadlines are correctly computed after evm_increaseTime (time forwarding).
+      const now = await getBlockTimestamp();
+      const milestoneDeadlines = milestones.map(
+        (ms) => now + Number(ms.deadlineDays) * 86400,
+      );
+
+      // 7) Dry-run the transaction to catch reverts BEFORE uploading to IPFS
+      //    Use a placeholder CID for the dry-run — the actual CID doesn't affect
+      //    gas estimation or revert checks (balance, allowance, parameters).
+      if (contracts.jobEscrow) {
+        try {
+          await contracts.jobEscrow.postJob.estimateGas(
+            agreementHash,
+            milestoneValues,
+            milestoneDeadlines,
+            reviewTimeout,
+            "QmPlaceholderDryRun",
+          );
+        } catch (dryRunErr) {
+          const msg = parseContractError(dryRunErr);
+          toast.error(`Transaction will fail: ${msg}`);
+          return;
+        }
+      }
+
+      // 8) Upload encrypted agreement envelope (including salt) to IPFS
+      //    Salt is embedded in the envelope so it can always be retrieved from
+      //    the same CID as the encrypted agreement.
+      //    publicSummary is an UNENCRYPTED summary so that anyone browsing
+      //    the job can read the agreement details without needing the job key.
+      const envelope = {
+        version: 1,
+        salt: saltHex,
+        encrypted: bufferToHex(encryptedBytes),
+        publicSummary: {
+          title,
+          description,
+          requirements,
+          milestones: milestones.map((ms, i) => ({
+            index: i,
+            description: ms.description,
+            value: ms.value,
+            deadlineDays: ms.deadlineDays,
+          })),
+          reviewTimeout,
+          postedBy: address,
+          timestamp: Date.now(),
+        },
+      };
+      const envelopeJSON = JSON.stringify(envelope);
+      const envelopeBlob = new Blob([envelopeJSON], { type: "application/json" });
+      const agreementCID = await uploadFile(
+        envelopeBlob,
+        `job-agreement-${Date.now()}`,
+      );
+      toast.success("Agreement uploaded to IPFS!");
+
+      // 9) Post the job on-chain
       const { receipt } = await postJob(
         agreementHash,
         milestoneValues,
@@ -193,7 +261,7 @@ export default function PostJob() {
         agreementCID,
       );
 
-      // 8) Extract jobId from events using ethers Interface
+      // 10) Extract jobId from events using ethers Interface
       let jobId: number | null = null;
       if (receipt?.logs) {
         const iface = new ethers.Interface(JobEscrowABI);
@@ -213,20 +281,13 @@ export default function PostJob() {
         }
       }
 
-      // Fallback: query nextJobId and subtract 1
-      if (jobId === null && contracts.jobEscrow) {
-        try {
-          const nextId = await contracts.jobEscrow.nextJobId();
-          jobId = Number(nextId) - 1;
-        } catch {
-          // last resort — should not happen
-          console.error("Failed to determine jobId");
-        }
+      if (jobId === null) {
+        console.error("Failed to determine jobId from transaction logs");
       }
 
-      // 9) Store the job key + title locally
+      // 11) Store the job key + title locally
       if (jobId !== null) {
-        storeJobKey(jobId, jobKeyHex);
+        storeJobKey(jobId, jobKeyHex, address);
         storeJobTitle(jobId, title);
         toast.success(`Job #${jobId} created! Key saved locally.`);
       } else {
@@ -414,7 +475,7 @@ export default function PostJob() {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">
-                Behavior Bond ({BEHAVIOR_BOND_BPS.New / 100}%)
+                Behavior Bond ({bondBps / 100}% — {tierKey} tier)
               </span>
               <span className="font-medium">{formatUSDC(behaviorBond)}</span>
             </div>
@@ -427,7 +488,7 @@ export default function PostJob() {
               </span>
             </div>
             <div className="flex justify-between text-xs text-gray-400 mt-2">
-              <span>Freelancer Deposit ({FREELANCER_DEPOSIT_BPS / 100}%)</span>
+              <span>Freelancer Deposit ({freelancerDepositBps / 100}% — New tier, varies by tier)</span>
               <span>{formatUSDC(freelancerDeposit)}</span>
             </div>
           </div>

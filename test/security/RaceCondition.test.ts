@@ -34,7 +34,7 @@ describe("Security: Race Conditions", function () {
     // Auto-approve should fail — milestone is no longer InReview
     await expect(
       jobEscrow.triggerAutoApprove(jobId, 0)
-    ).to.be.revertedWith("Not in review");
+    ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
   });
 
   it("raiseDispute + triggerAutoApprove: dispute takes priority when executed first", async function () {
@@ -55,7 +55,7 @@ describe("Security: Race Conditions", function () {
     // Auto-approve should fail — milestone is now Disputed
     await expect(
       jobEscrow.triggerAutoApprove(jobId, 0)
-    ).to.be.revertedWith("Not in review");
+    ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
   });
 
   it("approveMilestone + raiseDispute: only first succeeds", async function () {
@@ -73,7 +73,7 @@ describe("Security: Race Conditions", function () {
     // Dispute should fail — milestone is no longer InReview
     await expect(
       jobEscrow.connect(client).raiseDispute(jobId, 0)
-    ).to.be.revertedWith("Not in review");
+    ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
   });
 
   it("double executeDisputeRuling: second call is no-op (phase guard)", async function () {
@@ -98,9 +98,9 @@ describe("Security: Race Conditions", function () {
 
     // Advance through dispute lifecycle
     await time.increase(5 * ONE_DAY + 1);
-    await dispute.closeEvidencePhase(disputeId);
+    await dispute.connect(client).closeEvidencePhase(disputeId);
 
-    const ephKey = ethers.toUtf8Bytes("judge-eph-key");
+    const ephKey = ethers.randomBytes(33);
     await dispute.connect(platformAdmin).assignJudge(disputeId, judge.address, ephKey);
 
     const encKey = ethers.toUtf8Bytes("encrypted-key");
@@ -111,10 +111,10 @@ describe("Security: Race Conditions", function () {
     await dispute.connect(judge).submitRuling(disputeId, 1, reasonHash, 8000, 0);
 
     // Execute ruling once
-    await dispute.executeRuling(disputeId);
+    await dispute.connect(client).executeRuling(disputeId);
 
     // Second execution should revert
-    await expect(dispute.executeRuling(disputeId)).to.be.revertedWith("Not ruled yet");
+    await expect(dispute.connect(client).executeRuling(disputeId)).to.be.revertedWith("Not ruled yet");
   });
 
   it("double withdraw: second call reverts with zero balance", async function () {
@@ -134,6 +134,6 @@ describe("Security: Race Conditions", function () {
     // Second withdraw reverts
     await expect(
       jobEscrow.connect(freelancer1).withdraw()
-    ).to.be.revertedWith("Nothing to withdraw");
+    ).to.be.revertedWithCustomError(jobEscrow, "NothingToWithdraw");
   });
 });

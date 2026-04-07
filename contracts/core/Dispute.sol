@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "../interfaces/IDispute.sol";
 import "../interfaces/IJobEscrow.sol";
 import "../interfaces/IDataAvailability.sol";
@@ -11,11 +13,13 @@ import "../access/PlatformRoles.sol";
 /// @notice Handles dispute lifecycle: creation, evidence submission, judge assignment,
 ///         key distribution, ruling, and execution. Never holds or transfers USDC directly —
 ///         all fund redistribution is delegated to JobEscrow via executeDisputeRuling().
-contract Dispute is IDispute, AccessControl {
+contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, ReentrancyGuard, UUPSUpgradeable {
     // ── Constants ──
     uint256 public constant T_EVIDENCE = 5 days;
     uint256 public constant T_KEY_DISTRIBUTION = 2 days;
     uint256 public constant T_RULING = 14 days;
+    uint256 public constant KEY_DEFAULT_SLASH_BPS = 5000;
+    uint256 public constant MAX_EVIDENCE_PER_PARTY = 20;
 
     // ── State ──
     IJobEscrow public jobEscrow;
@@ -30,7 +34,6 @@ contract Dispute is IDispute, AccessControl {
         address client;
         address freelancer;
         uint256 milestoneValue;
-        uint256 disputeFee;
         address judge;
         bytes ephemeralPubKey;
         uint256 evidenceDeadline;
@@ -54,6 +57,7 @@ contract Dispute is IDispute, AccessControl {
 
     mapping(uint256 => DisputeData) public disputes;
     mapping(uint256 => Evidence[]) public evidenceSubmissions;
+    mapping(uint256 => mapping(address => uint256)) public evidenceCount; // L-7: per-party evidence count
     mapping(uint256 => mapping(address => bytes)) public encryptedKeys;
 
     // ── Events ──
@@ -65,15 +69,34 @@ contract Dispute is IDispute, AccessControl {
     event RulingSubmitted(uint256 indexed disputeId, Ruling ruling, bytes32 reasoningHash);
     event RulingExecuted(uint256 indexed disputeId, Ruling ruling);
     event EvidencePhaseClosed(uint256 indexed disputeId);
+    event RulingDefaultTriggered(uint256 indexed disputeId, address indexed judge);
 
-    constructor(address _dataAvailability) {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initializer replaces constructor for proxy pattern
+    /// @param _dataAvailability The DataAvailability contract address
+    /// @param initialAdmin The initial admin address
+    /// @param adminTransferDelay Delay (seconds) for admin transfer via AccessControlDefaultAdminRules
+    function initialize(
+        address _dataAvailability,
+        address initialAdmin,
+        uint48 adminTransferDelay
+    ) external initializer {
+        __AccessControlDefaultAdminRules_init(adminTransferDelay, initialAdmin);
         dataAvailability = IDataAvailability(_dataAvailability);
     }
 
-    /// @notice Set the JobEscrow address (post-deploy wiring)
+    /// @notice Authorize contract upgrades — restricted to DEFAULT_ADMIN_ROLE
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+    /// @notice Set or update the JobEscrow address (post-deploy wiring)
+    /// @dev M-2: Removed one-time lock to allow re-wiring if JobEscrow is redeployed.
+    ///      Security is maintained via onlyRole(DEFAULT_ADMIN_ROLE) with time-delayed transfer.
     function setJobEscrow(address _jobEscrow) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(address(jobEscrow) == address(0), "Already set");
+        require(_jobEscrow != address(0), "Invalid address");
         jobEscrow = IJobEscrow(_jobEscrow);
     }
 
@@ -99,7 +122,6 @@ contract Dispute is IDispute, AccessControl {
             client: client,
             freelancer: freelancer,
             milestoneValue: milestoneValue,
-            disputeFee: 0,          // Fee is tracked by JobEscrow
             judge: address(0),
             ephemeralPubKey: "",
             evidenceDeadline: block.timestamp + T_EVIDENCE,
@@ -133,6 +155,9 @@ contract Dispute is IDispute, AccessControl {
             msg.sender == d.client || msg.sender == d.freelancer,
             "Not a party to this dispute"
         );
+        // L-7: Cap evidence submissions per party
+        require(evidenceCount[disputeId][msg.sender] < MAX_EVIDENCE_PER_PARTY, "Max evidence reached");
+        evidenceCount[disputeId][msg.sender] += 1;
 
         evidenceSubmissions[disputeId].push(Evidence({
             submitter: msg.sender,
@@ -157,6 +182,12 @@ contract Dispute is IDispute, AccessControl {
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.Evidence, "Not in evidence phase");
         require(block.timestamp > d.evidenceDeadline, "Evidence window not closed");
+        require(
+            msg.sender == d.client ||
+            msg.sender == d.freelancer ||
+            hasRole(PlatformRoles.PLATFORM_ADMIN, msg.sender),
+            "Not authorized"
+        );
 
         d.phase = DisputePhase.AwaitingJudge;
 
@@ -175,6 +206,7 @@ contract Dispute is IDispute, AccessControl {
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.AwaitingJudge, "Wrong phase");
         require(judge != address(0), "Invalid judge");
+        require(ephemeralPubKey.length == 33, "Invalid ephemeral key length");
 
         d.judge = judge;
         d.ephemeralPubKey = ephemeralPubKey;
@@ -250,7 +282,7 @@ contract Dispute is IDispute, AccessControl {
             defaultRuling = Ruling.ClientWins;
             nonCooperator = d.freelancer;
             fShareBps = 0; // 100% to client
-            dSlashBps = 5000; // 50% deposit slash
+            dSlashBps = KEY_DEFAULT_SLASH_BPS; // 50% deposit slash
         }
 
         d.ruling = defaultRuling;
@@ -286,6 +318,9 @@ contract Dispute is IDispute, AccessControl {
             require(freelancerShareBps > 5000, "Freelancer wins must get majority");
         } else if (ruling == Ruling.ClientWins) {
             require(freelancerShareBps < 5000, "Client wins must get majority");
+        } else {
+            // Inconclusive: depositSlashBps must be 0 (no party is at fault)
+            require(depositSlashBps == 0, "Inconclusive must not slash deposit");
         }
 
         d.ruling = ruling;
@@ -297,13 +332,54 @@ contract Dispute is IDispute, AccessControl {
         emit RulingSubmitted(disputeId, ruling, reasoningHash);
     }
 
+    /// @notice Claim a default ruling when the judge misses the T_RULING deadline.
+    ///         Anyone may call once the deadline has passed.
+    ///         Resets dispute to AwaitingJudge for judge reassignment.
+    /// @param disputeId The dispute ID
+    function claimRulingDefault(uint256 disputeId) external {
+        DisputeData storage d = disputes[disputeId];
+        require(d.phase == DisputePhase.UnderReview, "Wrong phase");
+        require(block.timestamp > d.rulingDeadline, "Ruling deadline not passed");
+
+        // Save judge address before clearing
+        address failedJudge = d.judge;
+
+        // Revoke the judge's role — they failed their duty
+        _revokeRole(PlatformRoles.PLATFORM_JUDGE, failedJudge);
+
+        // Reset key submission state
+        d.clientKeySubmitted = false;
+        d.freelancerKeySubmitted = false;
+        d.judge = address(0);
+        d.ephemeralPubKey = "";
+        d.keyDistributionDeadline = 0;
+        d.rulingDeadline = 0;
+
+        // Return to AwaitingJudge for reassignment
+        d.phase = DisputePhase.AwaitingJudge;
+
+        emit RulingDefaultTriggered(disputeId, failedJudge);
+    }
+
     /// @notice Execute a ruling — calls JobEscrow.executeDisputeRuling()
     /// @param disputeId The dispute ID
-    function executeRuling(uint256 disputeId) external {
+    function executeRuling(uint256 disputeId) external nonReentrant {
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.Ruled, "Not ruled yet");
+        require(
+            msg.sender == d.client ||
+            msg.sender == d.freelancer ||
+            msg.sender == d.judge ||
+            hasRole(PlatformRoles.PLATFORM_ADMIN, msg.sender),
+            "Not authorized"
+        );
 
         d.phase = DisputePhase.Executed;
+
+        // L-2: Revoke judge role after ruling execution (least privilege)
+        if (d.judge != address(0)) {
+            _revokeRole(PlatformRoles.PLATFORM_JUDGE, d.judge);
+        }
 
         // Call JobEscrow to apply the ruling
         jobEscrow.executeDisputeRuling(

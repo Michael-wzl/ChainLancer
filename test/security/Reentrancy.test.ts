@@ -48,8 +48,8 @@ describe("Security: Reentrancy Protection", function () {
     expect(afterBalance).to.equal(0);
 
     // Second withdrawal should revert (no reentrancy possible)
-    await expect(jobEscrow.connect(freelancer1).withdraw()).to.be.revertedWith(
-      "Nothing to withdraw"
+    await expect(jobEscrow.connect(freelancer1).withdraw()).to.be.revertedWithCustomError(
+      jobEscrow, "NothingToWithdraw"
     );
   });
 
@@ -68,7 +68,7 @@ describe("Security: Reentrancy Protection", function () {
     // Try to approve again — should revert (status is no longer InReview)
     await expect(
       jobEscrow.connect(client).approveMilestone(jobId, 0)
-    ).to.be.revertedWith("Not in review");
+    ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
   });
 
   it("executeDisputeRuling() should process funds only once (fundsProcessed guard)", async function () {
@@ -95,10 +95,10 @@ describe("Security: Reentrancy Protection", function () {
 
     // Close evidence phase
     await helpers.time.increase(5 * ONE_DAY + 1);
-    await dispute.closeEvidencePhase(disputeId);
+    await dispute.connect(client).closeEvidencePhase(disputeId);
 
     // Assign judge
-    const ephKey = ethers.toUtf8Bytes("judge-eph-key");
+    const ephKey = ethers.randomBytes(33);
     await dispute.connect(platformAdmin).assignJudge(disputeId, judge.address, ephKey);
 
     // Both parties submit keys
@@ -111,7 +111,7 @@ describe("Security: Reentrancy Protection", function () {
     await dispute.connect(judge).submitRuling(disputeId, 1, reasonHash, 8000, 0);
 
     // Execute ruling
-    await dispute.executeRuling(disputeId);
+    await dispute.connect(client).executeRuling(disputeId);
 
     // Try to execute again — should revert (phase is Executed)
     await expect(dispute.executeRuling(disputeId)).to.be.revertedWith("Not ruled yet");
@@ -135,6 +135,6 @@ describe("Security: Reentrancy Protection", function () {
     // Auto-approve should fail because milestone is already Approved
     await expect(
       jobEscrow.connect(freelancer1).triggerAutoApprove(jobId, 0)
-    ).to.be.revertedWith("Not in review");
+    ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
   });
 });

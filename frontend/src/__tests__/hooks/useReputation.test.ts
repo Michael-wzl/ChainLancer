@@ -25,6 +25,7 @@ describe("hooks/useReputation", () => {
       500_000_000n, // totalValueCompleted
       5n,           // jobsCompleted
       1n,           // disputesLost
+      0n,           // cancellations
       850n,         // reputationScore
     ]),
     getClientProfile: vi.fn().mockResolvedValue([
@@ -34,6 +35,7 @@ describe("hooks/useReputation", () => {
       1n,             // jobsCancelledAfterSelection
       2n,             // autoApproveCount
       0n,             // disputesLost
+      12n,            // totalMilestoneCount
       900n,           // reputationScore
     ]),
     getClientTier: vi.fn().mockResolvedValue(2n), // Silver
@@ -62,6 +64,7 @@ describe("hooks/useReputation", () => {
       totalValueCompleted: 500_000_000n,
       jobsCompleted: 5,
       disputesLost: 1,
+      cancellations: 0,
       reputationScore: 850n,
     });
   });
@@ -81,6 +84,7 @@ describe("hooks/useReputation", () => {
       jobsCancelledAfterSelection: 1,
       autoApproveCount: 2,
       disputesLost: 0,
+      totalMilestoneCount: 12,
       reputationScore: 900n,
     });
   });

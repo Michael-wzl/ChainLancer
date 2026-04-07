@@ -13,9 +13,11 @@ interface EvidenceItem {
 interface EvidenceListProps {
   evidences: EvidenceItem[];
   currentUser?: string;
+  /** Only client, freelancer and assigned judge may view evidence content */
+  isAuthorized?: boolean;
 }
 
-export function EvidenceList({ evidences, currentUser }: EvidenceListProps) {
+export function EvidenceList({ evidences, currentUser, isAuthorized = false }: EvidenceListProps) {
   if (evidences.length === 0) {
     return (
       <div className="text-center py-8 text-gray-400 text-sm">
@@ -59,17 +61,25 @@ export function EvidenceList({ evidences, currentUser }: EvidenceListProps) {
               </div>
 
               <div className="mt-2 flex items-center gap-2">
-                <code className="text-xs text-gray-500 truncate flex-1">
-                  {ev.ipfsCid}
-                </code>
-                <a
-                  href={getGatewayUrl(ev.ipfsCid)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-brand-600 hover:text-brand-700 flex items-center gap-1 text-xs"
-                >
-                  View <ExternalLink className="h-3 w-3" />
-                </a>
+                {isAuthorized ? (
+                  <>
+                    <code className="text-xs text-gray-500 truncate flex-1">
+                      {ev.ipfsCid}
+                    </code>
+                    <a
+                      href={getGatewayUrl(ev.ipfsCid)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-brand-600 hover:text-brand-700 flex items-center gap-1 text-xs"
+                    >
+                      View <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </>
+                ) : (
+                  <span className="text-xs text-gray-400 italic">
+                    Evidence content restricted to involved parties and assigned judge.
+                  </span>
+                )}
               </div>
             </div>
           );

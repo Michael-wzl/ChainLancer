@@ -22,6 +22,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   "Not pending": "This milestone is not pending.",
   "Deadline not passed": "The milestone deadline has not passed yet.",
   "Cannot cancel in current state": "The job cannot be cancelled in its current state.",
+  "Cannot cancel while freelancer has pending offer": "Cannot cancel the job while a freelancer has been selected and is waiting to confirm. Wait for the offer to expire or be rejected.",
   "Milestone in review or disputed": "Cannot cancel while a milestone is in review or disputed.",
   "Cancellation already pending": "A cancellation request is already pending.",
   "No pending cancellation": "There is no pending cancellation request.",

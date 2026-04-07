@@ -17,7 +17,6 @@ export interface Dispute {
   judge: string;
 
   milestoneValue: bigint;
-  disputeFee: bigint;
 
   evidenceDeadline: number;
   keyDistributionDeadline: number;
@@ -51,8 +50,8 @@ export function useAssignedDisputes() {
     try {
       const contract = readContracts.dispute;
 
-      const totalDisputes = Number(await contract.disputeCounter());
-      const ids = Array.from({ length: totalDisputes }, (_, i) => i + 1);
+      const totalDisputes = Number(await contract.nextDisputeId());
+      const ids = Array.from({ length: totalDisputes }, (_, i) => i);
 
       const allDisputes = await Promise.all(
         ids.map((id) =>
@@ -82,7 +81,6 @@ export function useAssignedDisputes() {
           judge: d.judge,
 
           milestoneValue: BigInt(d.milestoneValue),
-          disputeFee: BigInt(d.disputeFee),
 
           evidenceDeadline: Number(d.evidenceDeadline),
           keyDistributionDeadline: Number(d.keyDistributionDeadline),

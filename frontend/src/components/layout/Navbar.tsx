@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   Briefcase,
@@ -12,16 +12,21 @@ import {
 } from "lucide-react";
 import { ConnectButton } from "../wallet/ConnectButton";
 import { NetworkBadge } from "../wallet/NetworkBadge";
+import { useWallet } from "../../contexts/WalletContext";
+import { useContracts } from "../../contexts/ContractContext";
+import { ROLES } from "../../config/constants";
 
-const NAV_ITEMS = [
+const BASE_NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/browse", label: "Browse Jobs", icon: Search },
   { to: "/post-job", label: "Post Job", icon: PlusCircle },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
-  { to: "/admin", label: "Admin", icon: Shield },
-  { to: "/judge", label: "Judge", icon: HammerIcon },
-  { to: "/admin", label: "Admin", icon: Shield },
+];
+
+const ROLE_NAV_ITEMS = [
+  { to: "/judge", label: "Judge", icon: HammerIcon, requiredRole: "judge" as const },
+  { to: "/admin", label: "Admin", icon: Shield, requiredRole: "admin" as const },
 ];
 
 type NavbarProps = {
@@ -30,6 +35,41 @@ type NavbarProps = {
 
 export function Navbar({ appName }: NavbarProps) {
   const location = useLocation();
+  const { address } = useWallet();
+  const { readContracts } = useContracts();
+  const [isJudge, setIsJudge] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (!address || !readContracts?.dispute) {
+      setIsJudge(false);
+      setIsAdmin(false);
+      return;
+    }
+    const checkRoles = async () => {
+      try {
+        const judge = await readContracts.dispute!.hasRole(ROLES.PLATFORM_JUDGE, address);
+        setIsJudge(judge);
+      } catch { setIsJudge(false); }
+      try {
+        const admin = await readContracts.dispute!.hasRole(ROLES.PLATFORM_ADMIN, address);
+        const defaultAdmin = await readContracts.dispute!.hasRole(
+          "0x0000000000000000000000000000000000000000000000000000000000000000", address
+        );
+        setIsAdmin(admin || defaultAdmin);
+      } catch { setIsAdmin(false); }
+    };
+    checkRoles();
+  }, [address, readContracts?.dispute]);
+
+  const NAV_ITEMS = [
+    ...BASE_NAV_ITEMS,
+    ...ROLE_NAV_ITEMS.filter(item => {
+      if (item.requiredRole === "judge") return isJudge;
+      if (item.requiredRole === "admin") return isAdmin;
+      return true;
+    }),
+  ];
   return (
     <nav className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -38,7 +78,7 @@ export function Navbar({ appName }: NavbarProps) {
           <Link to="/" className="flex items-center gap-2">
             <img
               src="/chainlancer-logo.svg"
-              alt="ChainLancer Logo"
+              alt="GigSecure Logo"
               className="h-8 w-8"
             />
             <span className="text-lg font-bold text-gray-900">{appName}</span>
@@ -51,7 +91,7 @@ export function Navbar({ appName }: NavbarProps) {
               const isActive = location.pathname === item.to;
               return (
                 <Link
-                  key={item.to}
+                  key={item.label}
                   to={item.to}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${isActive
                       ? "bg-brand-50 text-brand-700"
@@ -81,7 +121,7 @@ export function Navbar({ appName }: NavbarProps) {
             const isActive = location.pathname === item.to;
             return (
               <Link
-                key={item.to}
+                key={item.label}
                 to={item.to}
                 className={`flex items-center gap-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium ${isActive
                     ? "bg-brand-50 text-brand-700"

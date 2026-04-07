@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IJobEscrow.sol";
@@ -13,36 +14,79 @@ import "../interfaces/IDataAvailability.sol";
 import "../access/PlatformRoles.sol";
 import "../libraries/DisputeFeeLib.sol";
 import "../libraries/TimeoutLib.sol";
+import "../libraries/JobEscrowLib.sol";
 
 /// @title JobEscrow
 /// @notice Central contract — single authority over fund custody and milestone state.
 ///         Manages job lifecycle, escrow locking/release, milestones, cancellation.
-contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
+contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
     using DisputeFeeLib for uint256;
     using TimeoutLib for uint256;
+    using JobEscrowLib for JobEscrowLib.RulingContext;
+
+    // ═══════════════════════════════════════════════════════════════
+    //                       CUSTOM ERRORS
+    // ═══════════════════════════════════════════════════════════════
+
+    error ZeroAddress();
+    error InvalidState();
+    error OnlyClient();
+    error OnlyFreelancer();
+    error OnlyCounterparty();
+    error NotParty();
+    error NotApplicant();
+    error AlreadyApplied();
+    error MaxAppsReached();
+    error AlreadySelected();
+    error InvalidPubkeyLen();
+    error NotSelected();
+    error OfferNotExpired();
+    error StakeWindowExpired();
+    error InvalidMilestone();
+    error MilestoneNotPending();
+    error DeadlinePassed();
+    error DeadlineNotPassed();
+    error NotInReview();
+    error TimeoutNotExpired();
+    error NotDisputed();
+    error AlreadyProcessed();
+    error DepositSlashExceedsCap();
+    error MsInReviewOrDisputed();
+    error CancelAlreadyPending();
+    error NoPendingCancel();
+    error NotExpiredYet();
+    error AlreadyConfirmed();
+    error PrevNotExpired();
+    error NothingToWithdraw();
+    error NoMilestones();
+    error ArrayMismatch();
+    error TooManyMilestones();
+    error InvalidTimeout();
+    error EmptyAgreement();
+    error ZeroTotalValue();
+    error MsBelowMinimum();
+    error DeadlineInPast();
+    error PendingOffer();
+    error CancelWhileOffer();
+    error NoOffer();
 
     // ═══════════════════════════════════════════════════════════════
     //                         CONSTANTS
     // ═══════════════════════════════════════════════════════════════
 
     uint256 public constant PROTOCOL_FEE_BPS = 200;            // 2%
-    uint256 public constant FREELANCER_DEPOSIT_BPS = 500;       // 5%
-    uint256 public constant BEHAVIOR_BOND_NEW_BPS = 750;       // 7.5%
-    uint256 public constant BEHAVIOR_BOND_BRONZE_BPS = 500;     // 5%
-    uint256 public constant BEHAVIOR_BOND_SILVER_BPS = 250;     // 2.5%
-    uint256 public constant BEHAVIOR_BOND_GOLD_BPS = 100;       // 1%
     uint256 public constant MIN_MILESTONE_BPS = 1000;           // 10% minimum per milestone
     uint256 public constant T_ACCEPTANCE = 14 days;
     uint256 public constant T_STAKE = 3 days;
-    uint256 public constant BOND_SLASH_MAX_BPS = 300;           // 3% of milestone value
     uint256 public constant DEPOSIT_SLASH_MAX_BPS = 5000;       // 50% of deposit
+    uint256 public constant MAX_APPLICATIONS_PER_JOB = 100;     // M-2: Cap applications to prevent DoS
 
     // ═══════════════════════════════════════════════════════════════
     //                          STATE
     // ═══════════════════════════════════════════════════════════════
 
-    IERC20 public immutable usdc;
+    IERC20 public usdc;
     IDispute public dispute;
     IReputation public reputation;
     IDataAvailability public dataAvailability;
@@ -73,6 +117,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     struct Application {
         address freelancer;
         bytes32 proposalHash;
+        string proposalCID;
         uint256 appliedAt;
     }
 
@@ -81,7 +126,6 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         uint256 deadline;
         uint256 submittedAt;
         uint256 resolvedAt;
-        uint256 remainingReviewTime;  // Stored when dispute pauses the timer
         bytes32 deliverableHash;
         string deliverableCID;
         MilestoneStatus status;
@@ -99,13 +143,23 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     mapping(uint256 => Milestone[]) internal _milestones;
     mapping(uint256 => CancellationRequest) public cancelRequests;
     mapping(address => uint256) public withdrawableBalances;
-    mapping(uint256 => uint256) public disputeIds; // jobId => disputeId (for active disputes)
-    mapping(uint256 => uint256) public disputeFees; // jobId => dispute fee paid by initiator
-    mapping(uint256 => address) public disputeInitiators; // jobId => who paid the dispute fee
+    mapping(uint256 => mapping(uint256 => uint256)) public disputeIds; // jobId => milestoneIdx => disputeId
+    mapping(uint256 => mapping(uint256 => uint256)) public disputeFees; // jobId => milestoneIdx => dispute fee
+    mapping(uint256 => mapping(uint256 => address)) public disputeInitiators; // jobId => milestoneIdx => who paid
+
+    // ── G-2: O(1) remaining escrow tracking ──
+    mapping(uint256 => uint256) internal _totalFundsProcessed; // jobId => total milestone value processed
+
+    // ── M-2: O(1) duplicate application tracking ──
+    mapping(uint256 => mapping(address => bool)) internal _hasApplied;
+
+    // ── Encryption public key registry ──
+    mapping(address => bytes) public encryptionPubKeys;
 
     // ── Events ──
     event JobPosted(uint256 indexed jobId, address indexed client, uint256 totalValue, uint256 reviewTimeout, bytes32 agreementHash);
-    event ApplicationSubmitted(uint256 indexed jobId, address indexed freelancer, bytes32 proposalHash);
+    event PublicKeyRegistered(address indexed user, bytes pubKey);
+    event ApplicationSubmitted(uint256 indexed jobId, address indexed freelancer, bytes32 proposalHash, string proposalCID);
     event FreelancerSelected(uint256 indexed jobId, address indexed freelancer, bytes encryptedKey);
     event JobActivated(uint256 indexed jobId, address indexed freelancer, uint256 depositAmount);
     event MilestoneSubmitted(uint256 indexed jobId, uint256 indexed milestoneIdx, bytes32 deliverableHash, string deliverableCID);
@@ -113,6 +167,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     event MilestoneAutoApproved(uint256 indexed jobId, uint256 indexed milestoneIdx, address triggeredBy);
     event DisputeRaised(uint256 indexed jobId, uint256 indexed milestoneIdx, uint256 disputeId, address initiator);
     event DisputeRulingExecuted(uint256 indexed jobId, uint256 indexed milestoneIdx, uint8 ruling);
+    event DisputeFeeDistributed(uint256 indexed jobId, uint256 indexed milestoneIdx, address recipient, uint256 amount);
     event JobCompleted(uint256 indexed jobId);
     event JobCancelled(uint256 indexed jobId, address cancelledBy);
     event JobAbandoned(uint256 indexed jobId, uint256 milestoneIdx);
@@ -123,29 +178,48 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     event FundsWithdrawn(address indexed user, uint256 amount);
 
     // ═══════════════════════════════════════════════════════════════
-    //                       CONSTRUCTOR
+    //                       CONSTRUCTOR / INITIALIZER
     // ═══════════════════════════════════════════════════════════════
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initializer replaces constructor for proxy pattern
+    /// @param _usdc USDC token address
+    /// @param _dispute Dispute contract address
+    /// @param _reputation Reputation contract address
+    /// @param _dataAvailability DataAvailability contract address
+    /// @param _treasury Treasury address for protocol fees
+    /// @param initialAdmin The initial admin address
+    /// @param adminTransferDelay Delay (seconds) for admin transfer via AccessControlDefaultAdminRules
+    function initialize(
         address _usdc,
         address _dispute,
         address _reputation,
         address _dataAvailability,
-        address _treasury
-    ) {
-        require(_usdc != address(0), "Invalid USDC");
-        require(_reputation != address(0), "Invalid Reputation");
-        require(_dataAvailability != address(0), "Invalid DataAvailability");
-        require(_treasury != address(0), "Invalid Treasury");
+        address _treasury,
+        address initialAdmin,
+        uint48 adminTransferDelay
+    ) external initializer {
+        if (_usdc == address(0)) revert ZeroAddress();
+        if (_reputation == address(0)) revert ZeroAddress();
+        if (_dataAvailability == address(0)) revert ZeroAddress();
+        if (_treasury == address(0)) revert ZeroAddress();
+
+        __AccessControlDefaultAdminRules_init(adminTransferDelay, initialAdmin);
+        __Pausable_init();
 
         usdc = IERC20(_usdc);
         dispute = IDispute(_dispute);
         reputation = IReputation(_reputation);
         dataAvailability = IDataAvailability(_dataAvailability);
         treasury = _treasury;
-
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
+
+    /// @notice Authorize contract upgrades — restricted to DEFAULT_ADMIN_ROLE
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
     // ═══════════════════════════════════════════════════════════════
     //                     USER-FACING FUNCTIONS
@@ -164,31 +238,28 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         uint256 reviewTimeout,
         string calldata agreementCID
     ) external whenNotPaused nonReentrant returns (uint256 jobId) {
-        require(milestoneValues.length > 0, "No milestones");
-        require(milestoneValues.length == milestoneDeadlines.length, "Array length mismatch");
-        require(milestoneValues.length <= 20, "Too many milestones");
-        require(reviewTimeout.isValidReviewTimeout(), "Invalid review timeout");
-        require(agreementHash != bytes32(0), "Empty agreement hash");
+        if (milestoneValues.length == 0) revert NoMilestones();
+        if (milestoneValues.length != milestoneDeadlines.length) revert ArrayMismatch();
+        if (milestoneValues.length > 20) revert TooManyMilestones();
+        if (!reviewTimeout.isValidReviewTimeout()) revert InvalidTimeout();
+        if (agreementHash == bytes32(0)) revert EmptyAgreement();
 
         // Calculate total value and validate milestone minimums
         uint256 totalValue = 0;
         for (uint256 i = 0; i < milestoneValues.length; i++) {
             totalValue += milestoneValues[i];
         }
-        require(totalValue > 0, "Zero total value");
+        if (totalValue == 0) revert ZeroTotalValue();
 
         // Validate each milestone is >= 10% of total
         for (uint256 i = 0; i < milestoneValues.length; i++) {
-            require(
-                (milestoneValues[i] * 10_000) / totalValue >= MIN_MILESTONE_BPS,
-                "Milestone below minimum"
-            );
-            require(milestoneDeadlines[i] > block.timestamp, "Deadline in the past");
+            if ((milestoneValues[i] * 10_000) / totalValue < MIN_MILESTONE_BPS) revert MsBelowMinimum();
+            if (milestoneDeadlines[i] <= block.timestamp) revert DeadlineInPast();
         }
 
         // Determine behavior bond based on client tier (graduated)
         IReputation.Tier clientTier = reputation.getClientTier(msg.sender);
-        uint256 bondBps = _getBehaviorBondBps(clientTier);
+        uint256 bondBps = JobEscrowLib.getBehaviorBondBps(clientTier);
         uint256 behaviorBond = (totalValue * bondBps) / 10_000;
 
         // Transfer USDC: totalValue + behaviorBond
@@ -214,7 +285,6 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
                 deadline: milestoneDeadlines[i],
                 submittedAt: 0,
                 resolvedAt: 0,
-                remainingReviewTime: 0,
                 deliverableHash: bytes32(0),
                 deliverableCID: "",
                 status: MilestoneStatus.Pending,
@@ -240,32 +310,41 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @notice Apply for an open job
     /// @param jobId The job ID
     /// @param proposalHash Optional hash of the proposal (bytes32(0) if none)
-    function applyForJob(uint256 jobId, bytes32 proposalHash) external whenNotPaused {
+    /// @param proposalCID IPFS CID of the encrypted proposal
+    function applyForJob(uint256 jobId, bytes32 proposalHash, string calldata proposalCID) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(
-            job.state == JobState.Open || job.state == JobState.Applications,
-            "Job not accepting applications"
-        );
-        require(msg.sender != job.client, "Client cannot apply");
+        if (job.state != JobState.Open && job.state != JobState.Applications) revert InvalidState();
+        if (msg.sender == job.client) revert NotParty();
 
-        // Check for duplicate applications
+        // M-2: O(1) duplicate check via mapping (replaces O(n) loop)
+        if (_hasApplied[jobId][msg.sender]) revert AlreadyApplied();
+        // M-2: Cap applications to prevent DoS from unbounded array growth
+        if (_applications[jobId].length >= MAX_APPLICATIONS_PER_JOB) revert MaxAppsReached();
+
+        _hasApplied[jobId][msg.sender] = true;
         Application[] storage apps = _applications[jobId];
-        for (uint256 i = 0; i < apps.length; i++) {
-            require(apps[i].freelancer != msg.sender, "Already applied");
-        }
-
         apps.push(Application({
             freelancer: msg.sender,
             proposalHash: proposalHash,
+            proposalCID: proposalCID,
             appliedAt: block.timestamp
         }));
+
+        // Register proposal CID in DataAvailability
+        if (bytes(proposalCID).length > 0) {
+            dataAvailability.registerCID(
+                proposalCID,
+                IDataAvailability.ContentType.Proposal,
+                jobId
+            );
+        }
 
         // Transition to Applications if still Open
         if (job.state == JobState.Open) {
             job.state = JobState.Applications;
         }
 
-        emit ApplicationSubmitted(jobId, msg.sender, proposalHash);
+        emit ApplicationSubmitted(jobId, msg.sender, proposalHash, proposalCID);
     }
 
     /// @notice Select a freelancer from applicants
@@ -278,20 +357,13 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         bytes calldata encryptedKey
     ) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.client, "Only client");
-        require(job.state == JobState.Applications, "Not in applications");
-        require(freelancerAddr != address(0), "Invalid freelancer");
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Applications) revert InvalidState();
+        if (job.freelancer != address(0)) revert AlreadySelected();
+        if (freelancerAddr == address(0)) revert ZeroAddress();
 
-        // Verify freelancer has applied
-        bool found = false;
-        Application[] storage apps = _applications[jobId];
-        for (uint256 i = 0; i < apps.length; i++) {
-            if (apps[i].freelancer == freelancerAddr) {
-                found = true;
-                break;
-            }
-        }
-        require(found, "Freelancer has not applied");
+        // M-2: O(1) verification via mapping (replaces O(n) loop)
+        if (!_hasApplied[jobId][freelancerAddr]) revert NotApplicant();
 
         job.freelancer = freelancerAddr;
         job.encryptedKeyForFreelancer = encryptedKey;
@@ -300,12 +372,20 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         emit FreelancerSelected(jobId, freelancerAddr, encryptedKey);
     }
 
+    /// @notice Register or update the caller's secp256k1 encryption public key
+    /// @param pubKey Compressed secp256k1 public key (33 bytes)
+    function registerEncryptionKey(bytes calldata pubKey) external {
+        if (pubKey.length != 33) revert InvalidPubkeyLen();
+        encryptionPubKeys[msg.sender] = pubKey;
+        emit PublicKeyRegistered(msg.sender, pubKey);
+    }
+
     /// @notice Selected freelancer explicitly rejects the offer
     /// @param jobId The job ID
     function rejectOffer(uint256 jobId) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.freelancer, "Not selected freelancer");
-        require(job.state == JobState.Applications, "Not in applications");
+        if (msg.sender != job.freelancer) revert NotSelected();
+        if (job.state != JobState.Applications) revert InvalidState();
 
         address rejected = msg.sender;
         _clearSelection(jobId);
@@ -317,9 +397,9 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @param jobId The job ID
     function expireOffer(uint256 jobId) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(job.state == JobState.Applications, "Not in applications");
-        require(job.freelancer != address(0), "No pending offer");
-        require(block.timestamp > job.selectedAt + T_STAKE, "Offer not expired");
+        if (job.state != JobState.Applications) revert InvalidState();
+        if (job.freelancer == address(0)) revert NoOffer();
+        if (block.timestamp <= job.selectedAt + T_STAKE) revert OfferNotExpired();
 
         address expired = job.freelancer;
         _clearSelection(jobId);
@@ -331,11 +411,13 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @param jobId The job ID
     function confirmAndStake(uint256 jobId) external whenNotPaused nonReentrant {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.freelancer, "Not selected freelancer");
-        require(job.state == JobState.Applications, "Not in applications");
-        require(block.timestamp <= job.selectedAt + T_STAKE, "Stake window expired");
+        if (msg.sender != job.freelancer) revert NotSelected();
+        if (job.state != JobState.Applications) revert InvalidState();
+        if (block.timestamp > job.selectedAt + T_STAKE) revert StakeWindowExpired();
 
-        uint256 depositAmount = (job.totalValue * FREELANCER_DEPOSIT_BPS) / 10_000;
+        IReputation.Tier freelancerTier = reputation.getFreelancerTier(msg.sender);
+        uint256 depositBps = JobEscrowLib.getFreelancerDepositBps(freelancerTier);
+        uint256 depositAmount = (job.totalValue * depositBps) / 10_000;
         job.freelancerDeposit = depositAmount;
 
         // Transfer deposit from freelancer
@@ -359,13 +441,13 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         string calldata deliverableCID
     ) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.freelancer, "Only freelancer");
-        require(job.state == JobState.Active, "Job not active");
-        require(milestoneIdx < job.milestoneCount, "Invalid milestone index");
+        if (msg.sender != job.freelancer) revert OnlyFreelancer();
+        if (job.state != JobState.Active) revert InvalidState();
+        if (milestoneIdx >= job.milestoneCount) revert InvalidMilestone();
 
         Milestone storage ms = _milestones[jobId][milestoneIdx];
-        require(ms.status == MilestoneStatus.Pending, "Milestone not pending");
-        require(block.timestamp <= ms.deadline, "Milestone deadline passed");
+        if (ms.status != MilestoneStatus.Pending) revert MilestoneNotPending();
+        if (block.timestamp > ms.deadline) revert DeadlinePassed();
 
         ms.deliverableHash = deliverableHash;
         ms.deliverableCID = deliverableCID;
@@ -392,14 +474,15 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Milestone storage ms = _milestones[jobId][milestoneIdx];
 
         // ── CHECKS ──
-        require(msg.sender == job.client, "Only client");
-        require(job.state == JobState.Active, "Job not active");
-        require(ms.status == MilestoneStatus.InReview, "Not in review");
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Active) revert InvalidState();
+        if (ms.status != MilestoneStatus.InReview) revert NotInReview();
 
         // ── EFFECTS ──
         ms.status = MilestoneStatus.Approved;
         ms.resolvedAt = block.timestamp;
         _releaseMilestoneFunds(jobId, milestoneIdx);
+        job.milestonesCompleted++; // G-1: direct increment
 
         // ── INTERACTIONS ──
         reputation.recordMilestoneCompletion(job.freelancer, ms.value, false, false);
@@ -416,18 +499,16 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Milestone storage ms = _milestones[jobId][milestoneIdx];
 
         // ── CHECKS ──
-        require(job.state == JobState.Active, "Job not active");
-        require(ms.status == MilestoneStatus.InReview, "Not in review");
+        if (job.state != JobState.Active) revert InvalidState();
+        if (ms.status != MilestoneStatus.InReview) revert NotInReview();
         // Strict greater-than: client gets the full duration they chose
-        require(
-            block.timestamp > ms.submittedAt + job.reviewTimeout,
-            "Review timeout not expired"
-        );
+        if (block.timestamp <= ms.submittedAt + job.reviewTimeout) revert TimeoutNotExpired();
 
         // ── EFFECTS ──
         ms.status = MilestoneStatus.AutoApproved;
         ms.resolvedAt = block.timestamp;
         _releaseMilestoneFunds(jobId, milestoneIdx);
+        job.milestonesCompleted++; // G-1: direct increment
 
         // ── INTERACTIONS ──
         reputation.recordMilestoneCompletion(job.freelancer, ms.value, false, false);
@@ -445,23 +526,12 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Milestone storage ms = _milestones[jobId][milestoneIdx];
 
         // ── CHECKS ──
-        require(
-            msg.sender == job.client || msg.sender == job.freelancer,
-            "Not a party"
-        );
-        require(job.state == JobState.Active, "Job not active");
-        require(ms.status == MilestoneStatus.InReview, "Not in review");
+        if (msg.sender != job.client && msg.sender != job.freelancer) revert NotParty();
+        if (job.state != JobState.Active) revert InvalidState();
+        if (ms.status != MilestoneStatus.InReview) revert NotInReview();
 
         // ── EFFECTS ──
         ms.status = MilestoneStatus.Disputed;
-
-        // Pause review timer — record remaining time
-        uint256 reviewDeadline = ms.submittedAt + job.reviewTimeout;
-        if (block.timestamp < reviewDeadline) {
-            ms.remainingReviewTime = reviewDeadline - block.timestamp;
-        } else {
-            ms.remainingReviewTime = 0;
-        }
 
         // Calculate dispute fee
         uint256 disputeFee = ms.value.calculateFee();
@@ -470,8 +540,8 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         usdc.safeTransferFrom(msg.sender, address(this), disputeFee);
 
         // Track dispute fee for refund
-        disputeFees[jobId] = disputeFee;
-        disputeInitiators[jobId] = msg.sender;
+        disputeFees[jobId][milestoneIdx] = disputeFee;
+        disputeInitiators[jobId][milestoneIdx] = msg.sender;
 
         // ── INTERACTIONS ──
         uint256 disputeId = dispute.createDispute(
@@ -483,7 +553,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
             ms.value
         );
 
-        disputeIds[jobId] = disputeId;
+        disputeIds[jobId][milestoneIdx] = disputeId;
 
         emit DisputeRaised(jobId, milestoneIdx, disputeId, msg.sender);
     }
@@ -495,10 +565,17 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Job storage job = jobs[jobId];
         Milestone storage ms = _milestones[jobId][milestoneIdx];
 
-        require(msg.sender == job.client, "Only client");
-        require(job.state == JobState.Active, "Job not active");
-        require(ms.status == MilestoneStatus.Pending, "Not pending");
-        require(block.timestamp > ms.deadline, "Deadline not passed");
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Active) revert InvalidState();
+        if (milestoneIdx >= job.milestoneCount) revert InvalidMilestone();
+        if (ms.status != MilestoneStatus.Pending) revert MilestoneNotPending();
+        if (block.timestamp <= ms.deadline) revert DeadlineNotPassed();
+
+        // Ensure no milestones are InReview or Disputed
+        for (uint256 i = 0; i < job.milestoneCount; i++) {
+            MilestoneStatus _status = _milestones[jobId][i].status;
+            if (_status == MilestoneStatus.InReview || _status == MilestoneStatus.Disputed) revert MsInReviewOrDisputed();
+        }
 
         // ── EFFECTS ──
         job.state = JobState.Abandoned;
@@ -528,11 +605,13 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @param jobId The job ID
     function cancelJob(uint256 jobId) external nonReentrant {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.client, "Only client");
-        require(
-            job.state == JobState.Open || job.state == JobState.Applications,
-            "Cannot cancel in current state"
-        );
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Open && job.state != JobState.Applications) revert InvalidState();
+
+        // Prevent cancellation while a freelancer has a pending (non-expired) offer
+        if (job.freelancer != address(0) && job.selectedAt > 0) {
+            if (block.timestamp <= job.selectedAt + T_STAKE) revert CancelWhileOffer();
+        }
 
         job.state = JobState.Cancelled;
 
@@ -555,22 +634,16 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @param jobId The job ID
     function requestCancellation(uint256 jobId) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(
-            msg.sender == job.client || msg.sender == job.freelancer,
-            "Not a party"
-        );
-        require(job.state == JobState.Active, "Job not active");
+        if (msg.sender != job.client && msg.sender != job.freelancer) revert NotParty();
+        if (job.state != JobState.Active) revert InvalidState();
 
         // Check no milestones are currently in review or disputed
         for (uint256 i = 0; i < job.milestoneCount; i++) {
             MilestoneStatus status = _milestones[jobId][i].status;
-            require(
-                status != MilestoneStatus.InReview && status != MilestoneStatus.Disputed,
-                "Milestone in review or disputed"
-            );
+            if (status == MilestoneStatus.InReview || status == MilestoneStatus.Disputed) revert MsInReviewOrDisputed();
         }
 
-        require(!cancelRequests[jobId].active, "Cancellation already pending");
+        if (cancelRequests[jobId].active) revert CancelAlreadyPending();
 
         cancelRequests[jobId] = CancellationRequest({
             requestedBy: msg.sender,
@@ -587,14 +660,14 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Job storage job = jobs[jobId];
         CancellationRequest storage req = cancelRequests[jobId];
 
-        require(req.active, "No pending cancellation");
-        require(job.state == JobState.Active, "Job not active");
+        if (!req.active) revert NoPendingCancel();
+        if (job.state != JobState.Active) revert InvalidState();
 
         // Must be the counterparty
         if (req.requestedBy == job.client) {
-            require(msg.sender == job.freelancer, "Only counterparty");
+            if (msg.sender != job.freelancer) revert OnlyCounterparty();
         } else {
-            require(msg.sender == job.client, "Only counterparty");
+            if (msg.sender != job.client) revert OnlyCounterparty();
         }
 
         // ── EFFECTS ──
@@ -619,6 +692,8 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         // Reputation penalties
         if (req.requestedBy == job.client) {
             reputation.recordClientCancellation(job.client);
+        } else {
+            reputation.recordFreelancerCancellation(job.freelancer);
         }
 
         // Set retention expiry
@@ -631,14 +706,11 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @param jobId The job ID
     function withdrawExpiredJob(uint256 jobId) external nonReentrant {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.client, "Only client");
-        require(
-            job.state == JobState.Open || job.state == JobState.Applications,
-            "Invalid state"
-        );
-        require(block.timestamp > job.createdAt + T_ACCEPTANCE, "Not expired yet");
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Open && job.state != JobState.Applications) revert InvalidState();
+        if (block.timestamp <= job.createdAt + T_ACCEPTANCE) revert NotExpiredYet();
         // Must not have a confirmed freelancer (no Active state)
-        require(job.activatedAt == 0, "Freelancer already confirmed");
+        if (job.activatedAt != 0) revert AlreadyConfirmed();
 
         job.state = JobState.Cancelled;
 
@@ -662,27 +734,18 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         bytes calldata encryptedKey
     ) external whenNotPaused {
         Job storage job = jobs[jobId];
-        require(msg.sender == job.client, "Only client");
-        require(job.state == JobState.Applications, "Not in applications");
-        require(job.freelancer != address(0), "No previous selection");
-        require(
-            block.timestamp > job.selectedAt + T_STAKE,
-            "Previous selection not expired"
-        );
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.state != JobState.Applications) revert InvalidState();
 
-        // Clear previous selection
-        _clearSelection(jobId);
-
-        // Verify new freelancer has applied
-        bool found = false;
-        Application[] storage apps = _applications[jobId];
-        for (uint256 i = 0; i < apps.length; i++) {
-            if (apps[i].freelancer == newFreelancer) {
-                found = true;
-                break;
-            }
+        // If a previous selection still exists, it must be expired
+        if (job.freelancer != address(0)) {
+            if (block.timestamp <= job.selectedAt + T_STAKE) revert PrevNotExpired();
+            _clearSelection(jobId);
         }
-        require(found, "Freelancer has not applied");
+        // If job.freelancer == address(0), that's fine — previous was rejected/cleared
+
+        // M-2: O(1) verification via mapping (replaces O(n) loop)
+        if (!_hasApplied[jobId][newFreelancer]) revert NotApplicant();
 
         job.freelancer = newFreelancer;
         job.encryptedKeyForFreelancer = encryptedKey;
@@ -694,7 +757,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @notice Withdraw all available funds (pull-over-push pattern)
     function withdraw() external nonReentrant {
         uint256 amount = withdrawableBalances[msg.sender];
-        require(amount > 0, "Nothing to withdraw");
+        if (amount == 0) revert NothingToWithdraw();
 
         withdrawableBalances[msg.sender] = 0;
         usdc.safeTransfer(msg.sender, amount);
@@ -717,95 +780,62 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
         Job storage job = jobs[jobId];
         Milestone storage ms = _milestones[jobId][milestoneIdx];
 
-        require(ms.status == MilestoneStatus.Disputed, "Not disputed");
-        require(!ms.fundsProcessed, "Already processed");
+        if (ms.status != MilestoneStatus.Disputed) revert NotDisputed();
+        if (ms.fundsProcessed) revert AlreadyProcessed();
+        if (depositSlashBps > DEPOSIT_SLASH_MAX_BPS) revert DepositSlashExceedsCap();
 
         // ── EFFECTS ──
         ms.status = MilestoneStatus.Resolved;
         ms.resolvedAt = block.timestamp;
         ms.fundsProcessed = true;
+        job.milestonesCompleted++;
 
-        uint256 msValue = ms.value;
-        uint256 fee = (msValue * PROTOCOL_FEE_BPS) / 10_000;
-        uint256 distributable = msValue - fee;
+        // G-2: Track processed funds
+        _totalFundsProcessed[jobId] += ms.value;
 
-        // 0 = Inconclusive, 1 = FreelancerWins, 2 = ClientWins
+        // Compute fund distribution via external library (reduces contract size)
+        JobEscrowLib.RulingResult memory r = JobEscrowLib.computeRulingDistribution(
+            JobEscrowLib.RulingContext({
+                freelancer: job.freelancer,
+                client: job.client,
+                treasury: treasury,
+                freelancerDeposit: job.freelancerDeposit,
+                behaviorBond: job.behaviorBond,
+                totalValue: job.totalValue,
+                msValue: ms.value,
+                disputeFee: disputeFees[jobId][milestoneIdx],
+                disputeInitiator: disputeInitiators[jobId][milestoneIdx],
+                bondRefunded: job.bondRefunded
+            }),
+            ruling,
+            freelancerShareBps,
+            depositSlashBps
+        );
+
+        // Apply results
+        if (r.freelancerCredit > 0) withdrawableBalances[job.freelancer] += r.freelancerCredit;
+        if (r.clientCredit > 0) withdrawableBalances[job.client] += r.clientCredit;
+        if (r.treasuryCredit > 0) withdrawableBalances[treasury] += r.treasuryCredit;
+        if (r.newDeposit != job.freelancerDeposit) job.freelancerDeposit = r.newDeposit;
+        if (r.newBond != job.behaviorBond) job.behaviorBond = r.newBond;
+
+        // Clear dispute fee tracking
+        if (disputeFees[jobId][milestoneIdx] > 0) {
+            disputeFees[jobId][milestoneIdx] = 0;
+        }
+
+        // Emit dispute fee distribution event
+        if (r.feeAmount > 0) {
+            emit DisputeFeeDistributed(jobId, milestoneIdx, r.feeRecipient, r.feeAmount);
+        }
+
+        // Reputation updates based on ruling
         if (ruling == 1) {
-            // FreelancerWins
-            uint256 freelancerAmount = (distributable * freelancerShareBps) / 10_000;
-            uint256 clientAmount = distributable - freelancerAmount;
-
-            withdrawableBalances[job.freelancer] += freelancerAmount;
-            if (clientAmount > 0) {
-                withdrawableBalances[job.client] += clientAmount;
-            }
-            withdrawableBalances[treasury] += fee;
-
-            // Bond slash: up to 3% of milestone value from behavior bond to treasury
-            if (job.behaviorBond > 0 && !job.bondRefunded) {
-                uint256 bondSlash = (msValue * BOND_SLASH_MAX_BPS) / 10_000;
-                if (bondSlash > job.behaviorBond) {
-                    bondSlash = job.behaviorBond;
-                }
-                job.behaviorBond -= bondSlash;
-                withdrawableBalances[treasury] += bondSlash;
-            }
-
-            // Refund dispute fee to freelancer (winner)
-            if (disputeFees[jobId] > 0) {
-                withdrawableBalances[job.freelancer] += disputeFees[jobId];
-                disputeFees[jobId] = 0;
-            }
-
-            // Reputation updates
-            reputation.recordMilestoneCompletion(job.freelancer, msValue, true, true);
-            reputation.recordDisputeLoss(job.client);
-
+            reputation.recordMilestoneCompletion(job.freelancer, ms.value, true, true);
+            reputation.recordClientDisputeLoss(job.client);
         } else if (ruling == 2) {
-            // ClientWins
-            uint256 freelancerAmount = (distributable * freelancerShareBps) / 10_000;
-            uint256 clientAmount = distributable - freelancerAmount;
-
-            if (freelancerAmount > 0) {
-                withdrawableBalances[job.freelancer] += freelancerAmount;
-            }
-            withdrawableBalances[job.client] += clientAmount;
-            withdrawableBalances[treasury] += fee;
-
-            // Deposit slash — goes to treasury
-            if (depositSlashBps > 0 && job.freelancerDeposit > 0) {
-                uint256 depositSlash = (job.freelancerDeposit * depositSlashBps) / 10_000;
-                job.freelancerDeposit -= depositSlash;
-                withdrawableBalances[treasury] += depositSlash;
-            }
-
-            // Refund dispute fee to client (winner)
-            if (disputeFees[jobId] > 0) {
-                withdrawableBalances[job.client] += disputeFees[jobId];
-                disputeFees[jobId] = 0;
-            }
-
-            // Reputation updates
-            reputation.recordMilestoneCompletion(job.freelancer, msValue, true, false);
-            reputation.recordDisputeLoss(job.freelancer);
-
-        } else {
-            // Inconclusive (ruling == 0)
-            uint256 freelancerAmount = (distributable * freelancerShareBps) / 10_000;
-            uint256 clientAmount = distributable - freelancerAmount;
-
-            withdrawableBalances[job.freelancer] += freelancerAmount;
-            withdrawableBalances[job.client] += clientAmount;
-            withdrawableBalances[treasury] += fee;
-
-            // Refund dispute fee to initiator on inconclusive
-            if (disputeFees[jobId] > 0) {
-                address feeRecipient = disputeInitiators[jobId];
-                if (feeRecipient != address(0)) {
-                    withdrawableBalances[feeRecipient] += disputeFees[jobId];
-                }
-                disputeFees[jobId] = 0;
-            }
+            reputation.recordMilestoneCompletion(job.freelancer, ms.value, true, false);
+            reputation.recordFreelancerDisputeLoss(job.freelancer);
         }
 
         _checkAndFinalizeJob(jobId);
@@ -885,8 +915,11 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @dev Release milestone funds to freelancer (minus protocol fee)
     function _releaseMilestoneFunds(uint256 jobId, uint256 milestoneIdx) internal {
         Milestone storage ms = _milestones[jobId][milestoneIdx];
-        require(!ms.fundsProcessed, "Already processed");
+        if (ms.fundsProcessed) revert AlreadyProcessed();
         ms.fundsProcessed = true;
+
+        // G-2: Track processed funds for O(1) remaining calculation
+        _totalFundsProcessed[jobId] += ms.value;
 
         uint256 fee = (ms.value * PROTOCOL_FEE_BPS) / 10_000;
         uint256 payout = ms.value - fee;
@@ -896,24 +929,11 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     }
 
     /// @dev Check if all milestones are completed and finalize the job
+    /// @dev G-1: Callers now increment milestonesCompleted directly, so no loop is needed.
     function _checkAndFinalizeJob(uint256 jobId) internal {
         Job storage job = jobs[jobId];
-        uint256 completed = 0;
 
-        for (uint256 i = 0; i < job.milestoneCount; i++) {
-            MilestoneStatus status = _milestones[jobId][i].status;
-            if (
-                status == MilestoneStatus.Approved ||
-                status == MilestoneStatus.AutoApproved ||
-                status == MilestoneStatus.Resolved
-            ) {
-                completed++;
-            }
-        }
-
-        job.milestonesCompleted = uint8(completed);
-
-        if (completed == job.milestoneCount) {
+        if (job.milestonesCompleted == job.milestoneCount) {
             job.state = JobState.Completed;
 
             // Refund freelancer deposit
@@ -926,7 +946,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
             _refundBehaviorBond(jobId);
 
             // Record job completion in reputation
-            reputation.recordJobCompleted(job.client, job.totalValue);
+            reputation.recordJobCompleted(job.client, job.totalValue, job.milestoneCount);
 
             // Record freelancer job completion
             reputation.recordFreelancerJobCompleted(job.freelancer);
@@ -939,17 +959,9 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     }
 
     /// @dev Calculate remaining escrow for unprocessed milestones
+    /// @dev G-2: Uses totalFundsProcessed counter instead of looping over milestones.
     function _calculateRemainingEscrow(uint256 jobId) internal view returns (uint256) {
-        Job storage job = jobs[jobId];
-        uint256 remaining = 0;
-
-        for (uint256 i = 0; i < job.milestoneCount; i++) {
-            if (!_milestones[jobId][i].fundsProcessed) {
-                remaining += _milestones[jobId][i].value;
-            }
-        }
-
-        return remaining;
+        return jobs[jobId].totalValue - _totalFundsProcessed[jobId];
     }
 
     /// @dev Refund behavior bond if not already refunded
@@ -964,16 +976,14 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, Pausable, AccessControl {
     /// @dev Clear the current freelancer selection (shared by rejectOffer, expireOffer, reselectFreelancer)
     function _clearSelection(uint256 jobId) internal {
         Job storage job = jobs[jobId];
+        address previous = job.freelancer;
         job.freelancer = address(0);
         job.encryptedKeyForFreelancer = "";
         job.selectedAt = 0;
+        if (previous != address(0)) {
+            emit FreelancerDeselected(jobId, previous);
+        }
     }
 
-    /// @dev Returns behavior bond rate in BPS based on client tier
-    function _getBehaviorBondBps(IReputation.Tier tier) internal pure returns (uint256) {
-        if (tier == IReputation.Tier.Gold) return BEHAVIOR_BOND_GOLD_BPS;
-        if (tier == IReputation.Tier.Silver) return BEHAVIOR_BOND_SILVER_BPS;
-        if (tier == IReputation.Tier.Bronze) return BEHAVIOR_BOND_BRONZE_BPS;
-        return BEHAVIOR_BOND_NEW_BPS; // Default for New
-    }
+
 }

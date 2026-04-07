@@ -28,12 +28,12 @@ describe("Security: Access Control", function () {
 
       const { jobId } = await createDefaultJob(jobEscrow, client);
       const proposalHash = ethers.keccak256(ethers.toUtf8Bytes("proposal"));
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash, "");
 
       const encKey = ethers.toUtf8Bytes("enc-key");
       await expect(
         jobEscrow.connect(freelancer2).selectFreelancer(jobId, freelancer1.address, encKey)
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
     });
 
     it("confirmAndStake: rejects non-selected freelancer", async function () {
@@ -42,8 +42,8 @@ describe("Security: Access Control", function () {
 
       const { jobId } = await createDefaultJob(jobEscrow, client);
       const proposalHash = ethers.keccak256(ethers.toUtf8Bytes("proposal"));
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash);
-      await jobEscrow.connect(freelancer2).applyForJob(jobId, proposalHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash, "");
+      await jobEscrow.connect(freelancer2).applyForJob(jobId, proposalHash, "");
 
       const encKey = ethers.toUtf8Bytes("enc-key");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, encKey);
@@ -51,7 +51,7 @@ describe("Security: Access Control", function () {
       // freelancer2 should not be able to stake
       await expect(
         jobEscrow.connect(freelancer2).confirmAndStake(jobId)
-      ).to.be.revertedWith("Not selected freelancer");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotSelected");
     });
 
     it("submitMilestone: rejects non-freelancer", async function () {
@@ -63,7 +63,7 @@ describe("Security: Access Control", function () {
       const deliverableHash = ethers.keccak256(ethers.toUtf8Bytes("deliverable-0"));
       await expect(
         jobEscrow.connect(client).submitMilestone(jobId, 0, deliverableHash, "QmDeliv0")
-      ).to.be.revertedWith("Only freelancer");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyFreelancer");
     });
 
     it("approveMilestone: rejects non-client", async function () {
@@ -77,7 +77,7 @@ describe("Security: Access Control", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).approveMilestone(jobId, 0)
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
     });
 
     it("cancelJob: rejects non-client", async function () {
@@ -88,7 +88,7 @@ describe("Security: Access Control", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).cancelJob(jobId)
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
     });
 
     it("claimAbandonment: rejects non-client", async function () {
@@ -99,7 +99,7 @@ describe("Security: Access Control", function () {
 
       await expect(
         jobEscrow.connect(freelancer2).claimAbandonment(jobId, 0)
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
     });
 
     it("executeDisputeRuling: rejects direct call from non-DISPUTE_ROLE", async function () {
@@ -138,11 +138,11 @@ describe("Security: Access Control", function () {
       ).to.be.reverted;
     });
 
-    it("recordDisputeLoss: rejects non-ESCROW_ROLE", async function () {
+    it("recordFreelancerDisputeLoss: rejects non-ESCROW_ROLE", async function () {
       const { reputation, client } = await loadFixture(deployFullPlatformFixture);
 
       await expect(
-        reputation.connect(client).recordDisputeLoss(client.address)
+        reputation.connect(client).recordFreelancerDisputeLoss(client.address)
       ).to.be.reverted;
     });
 
@@ -174,7 +174,7 @@ describe("Security: Access Control", function () {
       const { reputation, client } = await loadFixture(deployFullPlatformFixture);
 
       await expect(
-        reputation.connect(client).recordJobCompleted(client.address, usdc(1000))
+        reputation.connect(client).recordJobCompleted(client.address, usdc(1000), 3)
       ).to.be.reverted;
     });
 
@@ -205,7 +205,7 @@ describe("Security: Access Control", function () {
     it("assignJudge: rejects non-PLATFORM_ADMIN", async function () {
       const { dispute, client, judge } = await loadFixture(deployFullPlatformFixture);
 
-      const ephKey = ethers.toUtf8Bytes("judge-eph-key");
+      const ephKey = ethers.randomBytes(33);
       await expect(
         dispute.connect(client).assignJudge(0, judge.address, ephKey)
       ).to.be.reverted;
@@ -219,13 +219,13 @@ describe("Security: Access Control", function () {
       ).to.be.reverted;
     });
 
-    it("setJobEscrow: rejects second call (already set)", async function () {
+    it("setJobEscrow: allows admin to update (M-2: removed one-time lock)", async function () {
       const { dispute, deployer } = await loadFixture(deployFullPlatformFixture);
 
-      // Already set in fixture
+      // M-2: Admin can now re-set the JobEscrow address (no more "Already set" revert)
       await expect(
         dispute.connect(deployer).setJobEscrow(deployer.address)
-      ).to.be.revertedWith("Already set");
+      ).to.not.be.reverted;
     });
   });
 

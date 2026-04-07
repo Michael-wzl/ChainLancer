@@ -93,7 +93,7 @@ describe("Integration: Dispute Path", function () {
     await usdcContract.connect(client).approve(await jobEscrow.getAddress(), ethers.MaxUint256);
     await jobEscrow.connect(client).raiseDispute(jobId, 0);
 
-    const disputeId = await jobEscrow.disputeIds(jobId);
+    const disputeId = await jobEscrow.disputeIds(jobId, 0);
 
     return { ...fixture, jobId, disputeId };
   }
@@ -103,11 +103,11 @@ describe("Integration: Dispute Path", function () {
 
     // Evidence phase
     await time.increase(5 * ONE_DAY + 1);
-    await dispute.closeEvidencePhase(disputeId);
+    await dispute.connect(client).closeEvidencePhase(disputeId);
 
     // Assign judge
     await dispute.connect(platformAdmin).assignJudge(
-      disputeId, judge.address, ethers.toUtf8Bytes("eph-key")
+      disputeId, judge.address, ethers.randomBytes(33)
     );
 
     // Key distribution
@@ -120,12 +120,12 @@ describe("Integration: Dispute Path", function () {
   it("should handle FreelancerWins ruling correctly", async function () {
     let fixture = await createDisputeScenario();
     fixture = await advanceToRulingPhase(fixture);
-    const { dispute, judge, jobEscrow, freelancer1, treasury, disputeId, jobId } = fixture;
+    const { dispute, judge, jobEscrow, freelancer1, client, treasury, disputeId, jobId } = fixture;
 
     // Judge rules: FreelancerWins, 100% to freelancer
     const reasonHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
     await dispute.connect(judge).submitRuling(disputeId, 1, reasonHash, 10000, 0);
-    await dispute.executeRuling(disputeId);
+    await dispute.connect(client).executeRuling(disputeId);
 
     // Milestone should be Resolved
     const msInfo = await jobEscrow.getMilestoneInfo(jobId, 0);
@@ -151,7 +151,7 @@ describe("Integration: Dispute Path", function () {
     // Judge rules: ClientWins, 0% to freelancer
     const reasonHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
     await dispute.connect(judge).submitRuling(disputeId, 2, reasonHash, 0, 0);
-    await dispute.executeRuling(disputeId);
+    await dispute.connect(client).executeRuling(disputeId);
 
     // Client can withdraw refund
     const balBefore = await fixture.usdc.balanceOf(client.address);
@@ -168,7 +168,7 @@ describe("Integration: Dispute Path", function () {
     // Judge rules: Inconclusive, 50/50 split
     const reasonHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
     await dispute.connect(judge).submitRuling(disputeId, 0, reasonHash, 5000, 0);
-    await dispute.executeRuling(disputeId);
+    await dispute.connect(fixture.client).executeRuling(disputeId);
 
     // Both can withdraw
     await jobEscrow.connect(fixture.client).withdraw();
@@ -219,7 +219,7 @@ describe("Integration: Timeouts", function () {
 
     // Apply and select freelancer
     const proposalHash = ethers.keccak256(ethers.toUtf8Bytes("proposal"));
-    await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash);
+    await jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash, "");
     const encKey = ethers.toUtf8Bytes("enc-key");
     await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, encKey);
 

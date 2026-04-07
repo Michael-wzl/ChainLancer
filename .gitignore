@@ -18,9 +18,6 @@ node_modules/
 coverage/
 coverage.json
 
-# Secrets / credentials
-JWT.txt
-
 # Screenshots & debug assets
 test-screenshots/
 *.png
@@ -30,6 +27,7 @@ test-screenshots/
 
 # Misc / junk drawer
 trash/
+tmp/
 
 # OS files
 .DS_Store

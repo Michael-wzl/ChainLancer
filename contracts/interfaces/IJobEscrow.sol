@@ -4,7 +4,17 @@ pragma solidity ^0.8.24;
 /// @title IJobEscrow
 /// @notice Interface for Dispute → JobEscrow callbacks
 interface IJobEscrow {
-    enum JobState { Open, Applications, Active, Completed, Cancelled, Abandoned }
+    enum JobState {
+        Open,          // Job posted, no applicants
+        Applications,  // Has applicants; may also have a selected freelancer
+                       // (OFFER_PENDING state from design doc is represented as
+                       //  Applications + freelancer != address(0))
+                       // DESIGN DEVIATION (G-1): Intentionally merged into Applications.
+        Active,        // Freelancer confirmed and staked
+        Completed,     // All milestones finalized
+        Cancelled,     // Job cancelled (mutual or unilateral)
+        Abandoned      // Freelancer missed deadline
+    }
     enum MilestoneStatus { Pending, InReview, Approved, AutoApproved, Disputed, Resolved }
 
     /// @notice Called by Dispute.sol to apply a ruling's fund redistribution.
@@ -31,6 +41,9 @@ interface IJobEscrow {
     /// @notice Anyone can clear a stale offer after T_STAKE expires
     /// @param jobId The job ID
     function expireOffer(uint256 jobId) external;
+
+    /// @notice Emitted when a previously selected freelancer is deselected
+    event FreelancerDeselected(uint256 indexed jobId, address indexed freelancer);
 
     /// @notice View: get job info for dispute validation
     function getJobInfo(uint256 jobId) external view returns (

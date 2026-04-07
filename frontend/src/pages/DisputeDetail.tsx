@@ -1,19 +1,23 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Scale, Upload, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Scale, Upload, AlertTriangle, Clock, Gavel } from "lucide-react";
 import { ethers } from "ethers";
 import toast from "react-hot-toast";
 import { useWallet } from "../contexts/WalletContext";
 import { useContracts } from "../contexts/ContractContext";
 import { useJobDetail } from "../hooks/useJobList";
+import { useDispute } from "../hooks/useDispute";
 import { TransactionButton } from "../components/common/TransactionButton";
 import { DisputeBanner } from "../components/dispute/DisputeBanner";
 import { EvidenceList } from "../components/dispute/EvidenceList";
+import { KeyDistributionPanel } from "../components/dispute/KeyDistributionPanel";
+import { CountdownTimer } from "../components/job/CountdownTimer";
+import { RulingForm } from "../components/judge/RulingForm";
+import { useBlockTimestamp } from "../hooks/useBlockTimestamp";
 import { uploadJSON } from "../ipfs/pinata";
 import { parseContractError } from "../utils/errors";
 import { formatUSDC, truncateAddress, formatDate } from "../utils/format";
 import { getJobKey } from "../utils/storage";
-import { encryptForRecipient } from "../crypto/keyExchange";
 import {
   DisputePhase,
   Ruling,
@@ -28,6 +32,8 @@ interface DisputeInfo {
   judge: string;
   ephemeralPubKey: string;
   evidenceDeadline: number;
+  keyDistributionDeadline: number;
+  rulingDeadline: number;
   clientKeySubmitted: boolean;
   freelancerKeySubmitted: boolean;
 }
@@ -62,14 +68,19 @@ export default function DisputeDetail() {
   const isClient = address?.toLowerCase() === job?.client?.toLowerCase();
   const isFreelancer =
     address?.toLowerCase() === job?.freelancer?.toLowerCase();
+  const blockNow = useBlockTimestamp();
+  const isJudge =
+    address?.toLowerCase() === dispute?.judge?.toLowerCase() &&
+    dispute?.judge !== "0x0000000000000000000000000000000000000000";
+  const isAuthorizedViewer = isClient || isFreelancer || isJudge;
 
   // Fetch dispute info — first resolve disputeId from JobEscrow, then query Dispute contract
   const fetchDispute = useCallback(async () => {
     if (!readContracts.dispute || !readContracts.jobEscrow || jobId === null) return;
     setLoading(true);
     try {
-      // Bug #4 fix: look up disputeId from JobEscrow.disputeIds(jobId)
-      const dId = Number(await readContracts.jobEscrow.disputeIds(jobId));
+      // Look up disputeId from JobEscrow.disputeIds(jobId, milestoneIdx)
+      const dId = Number(await readContracts.jobEscrow.disputeIds(jobId, milestoneIdx));
       setDisputeId(dId);
 
       // Bug #3 fix: disputes mapping takes 1 arg (disputeId), not 2
@@ -89,6 +100,8 @@ export default function DisputeDetail() {
         judge: info.judge,
         ephemeralPubKey: info.ephemeralPubKey,
         evidenceDeadline: Number(info.evidenceDeadline),
+        keyDistributionDeadline: Number(info.keyDistributionDeadline),
+        rulingDeadline: Number(info.rulingDeadline),
         clientKeySubmitted: info.clientKeySubmitted,
         freelancerKeySubmitted: info.freelancerKeySubmitted,
       });
@@ -111,7 +124,7 @@ export default function DisputeDetail() {
     } finally {
       setLoading(false);
     }
-  }, [readContracts.dispute, readContracts.jobEscrow, jobId]);
+  }, [readContracts.dispute, readContracts.jobEscrow, jobId, milestoneIdx]);
 
   useEffect(() => {
     fetchDispute();
@@ -134,13 +147,25 @@ export default function DisputeDetail() {
         content: evidenceText,
         timestamp: Date.now(),
       };
+
+      // Bug #1 fix: use disputeId (not jobId), compute evidenceHash (keccak256)
+      const evidenceHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(evidenceDoc)));
+
+      // Dry-run the transaction to catch reverts BEFORE uploading to IPFS
+      try {
+        await contracts.dispute.submitEvidence.estimateGas(disputeId, evidenceHash, "QmPlaceholderDryRun");
+      } catch (dryRunErr) {
+        toast.error(`Transaction will fail: ${parseContractError(dryRunErr)}`, { id: "evidence" });
+        setTxLoading(false);
+        return;
+      }
+
+      // Upload to IPFS only after dry-run passes
       const cid = await uploadJSON(
         evidenceDoc,
         `evidence-${jobId}-${milestoneIdx}-${Date.now()}`
       );
 
-      // Bug #1 fix: use disputeId (not jobId), compute evidenceHash (keccak256)
-      const evidenceHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(evidenceDoc)));
       const tx = await contracts.dispute.submitEvidence(disputeId, evidenceHash, cid);
       toast.loading("Submitting evidence...", { id: "evidence" });
       await tx.wait();
@@ -154,35 +179,8 @@ export default function DisputeDetail() {
     }
   };
 
-  // Submit key for judge review
-  const handleSubmitKey = async () => {
-    if (!contracts.dispute || jobId === null || disputeId === null || !dispute) return;
-    setTxLoading(true);
-    try {
-      // Retrieve the actual job key from local storage
-      const keyHex = getJobKey(jobId);
-      if (!keyHex) {
-        toast.error("No decryption key found for this job. Cannot submit.");
-        setTxLoading(false);
-        return;
-      }
-
-      // Bug #2 fix: encrypt key with judge's ephemeral public key, use distributeKeyToJudge
-      const encryptedKey = await encryptForRecipient(keyHex, dispute.judge);
-      const tx = await contracts.dispute.distributeKeyToJudge(
-        disputeId,
-        encryptedKey
-      );
-      toast.loading("Submitting key...", { id: "key" });
-      await tx.wait();
-      toast.success("Key submitted!", { id: "key" });
-      fetchDispute();
-    } catch (err) {
-      toast.error(parseContractError(err), { id: "key" });
-    } finally {
-      setTxLoading(false);
-    }
-  };
+  // Hooks
+  const { closeEvidencePhase, claimRulingDefault, executeRuling: execRuling, loading: disputeHookLoading } = useDispute();
 
   if (jobLoading || loading) {
     return (
@@ -298,63 +296,188 @@ export default function DisputeDetail() {
 
       {/* Evidence */}
       <div className="card">
-        <EvidenceList evidences={evidenceList} currentUser={address ?? undefined} />
+        <EvidenceList evidences={evidenceList} currentUser={address ?? undefined} isAuthorized={isAuthorizedViewer} />
       </div>
 
       {/* Submit evidence (during evidence phase) */}
       {dispute.phase === DisputePhase.Evidence &&
-        (isClient || isFreelancer) && (
+        (isClient || isFreelancer) && (() => {
+          const mySubmissions = evidenceList.filter(
+            (ev) => ev.submitter.toLowerCase() === address?.toLowerCase()
+          ).length;
+          const remaining = 20 - mySubmissions;
+          return (
           <div className="card">
             <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
               <Upload className="h-4 w-4" /> Submit Evidence
             </h3>
-            <textarea
-              value={evidenceText}
-              onChange={(e) => setEvidenceText(e.target.value)}
-              rows={4}
-              placeholder="Describe your evidence..."
-              className="input resize-y mb-3"
-            />
+            {remaining > 0 ? (
+              <>
+                <textarea
+                  value={evidenceText}
+                  onChange={(e) => setEvidenceText(e.target.value)}
+                  rows={4}
+                  placeholder="Describe your evidence..."
+                  className="input resize-y mb-2"
+                />
+                <p className="text-xs text-gray-400 mb-3">
+                  {remaining} of 20 submissions remaining
+                </p>
+                <TransactionButton
+                  onClick={handleSubmitEvidence}
+                  isLoading={txLoading}
+                  variant="primary"
+                >
+                  <Upload className="mr-1.5 h-4 w-4" /> Submit Evidence
+                </TransactionButton>
+              </>
+            ) : (
+              <p className="text-sm text-amber-600">
+                You have reached the maximum of 20 evidence submissions for this dispute.
+              </p>
+            )}
+          </div>
+          );
+        })()}
+
+      {/* Close Evidence Phase button */}
+      {dispute.phase === DisputePhase.Evidence &&
+        dispute.evidenceDeadline > 0 &&
+        blockNow > dispute.evidenceDeadline && (
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="h-4 w-4 text-orange-500" />
+              <p className="text-sm text-orange-700 font-medium">
+                Evidence deadline has passed. The evidence phase can be closed.
+              </p>
+            </div>
             <TransactionButton
-              onClick={handleSubmitEvidence}
+              onClick={async () => {
+                if (disputeId === null) return;
+                setTxLoading(true);
+                try {
+                  await closeEvidencePhase(disputeId);
+                  fetchDispute();
+                } catch {
+                  // Error toasted by hook
+                } finally {
+                  setTxLoading(false);
+                }
+              }}
               isLoading={txLoading}
               variant="primary"
             >
-              <Upload className="mr-1.5 h-4 w-4" /> Submit Evidence
+              <Clock className="mr-1.5 h-4 w-4" /> Close Evidence Phase
             </TransactionButton>
           </div>
         )}
 
-      {/* Key submission (during key distribution phase) */}
-      {dispute.phase === DisputePhase.KeyDistribution && (
+      {/* Evidence deadline countdown */}
+      {dispute.phase === DisputePhase.Evidence && dispute.evidenceDeadline > 0 && (
         <div className="card">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
-            <AlertTriangle className="h-4 w-4" /> Key Submission
-          </h3>
-          <p className="text-sm text-gray-500 mb-3">
-            Submit your decryption key so the judge can review the deliverables.
-          </p>
-          <div className="flex gap-2 text-xs text-gray-400 mb-3">
-            <span>
-              Client key:{" "}
-              {dispute.clientKeySubmitted ? "✅ Submitted" : "❌ Pending"}
-            </span>
-            <span>
-              Freelancer key:{" "}
-              {dispute.freelancerKeySubmitted ? "✅ Submitted" : "❌ Pending"}
-            </span>
-          </div>
+          <CountdownTimer
+            targetTimestamp={dispute.evidenceDeadline}
+            label="Evidence deadline"
+            expiredLabel="Expired — phase can be closed"
+          />
+        </div>
+      )}
 
-          {((isClient && !dispute.clientKeySubmitted) ||
-            (isFreelancer && !dispute.freelancerKeySubmitted)) && (
+      {/* Key distribution (using extracted component) */}
+      {dispute.phase === DisputePhase.KeyDistribution && disputeId !== null && jobId !== null && (
+        <KeyDistributionPanel
+          disputeId={disputeId}
+          judgeAddress={dispute.judge}
+          isClientKeySubmitted={dispute.clientKeySubmitted}
+          isFreelancerKeySubmitted={dispute.freelancerKeySubmitted}
+          keyDistributionDeadline={dispute.keyDistributionDeadline}
+          jobId={jobId}
+          userRole={isClient ? "client" : isFreelancer ? "freelancer" : "none"}
+          onKeyDistributed={fetchDispute}
+          blockNow={blockNow}
+        />
+      )}
+
+      {/* Ruling deadline countdown (during UnderReview phase) */}
+      {dispute.phase === DisputePhase.UnderReview && dispute.rulingDeadline > 0 && (
+        <div className="card">
+          <CountdownTimer
+            targetTimestamp={dispute.rulingDeadline}
+            label="Ruling deadline"
+            expiredLabel="Ruling deadline expired"
+          />
+        </div>
+      )}
+
+      {/* Judge Ruling Form (judge sees this during UnderReview) */}
+      {dispute.phase === DisputePhase.UnderReview && isJudge && disputeId !== null && (
+        <RulingForm
+          disputeId={disputeId}
+          phase={dispute.phase}
+          onRulingSubmitted={fetchDispute}
+          onRulingExecuted={fetchDispute}
+        />
+      )}
+
+      {/* Claim Ruling Default (when judge missed the ruling deadline) */}
+      {dispute.phase === DisputePhase.UnderReview &&
+        dispute.rulingDeadline > 0 &&
+        blockNow > dispute.rulingDeadline && (
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              <p className="text-sm text-orange-700 font-medium">
+                The judge has missed the ruling deadline. You can claim a ruling
+                default to remove the judge and reset the dispute for reassignment.
+              </p>
+            </div>
             <TransactionButton
-              onClick={handleSubmitKey}
+              onClick={async () => {
+                if (disputeId === null) return;
+                setTxLoading(true);
+                try {
+                  await claimRulingDefault(disputeId);
+                  fetchDispute();
+                } catch {
+                  // Error toasted by hook
+                } finally {
+                  setTxLoading(false);
+                }
+              }}
               isLoading={txLoading}
-              variant="primary"
+              variant="danger"
             >
-              Submit Decryption Key
+              <AlertTriangle className="mr-1.5 h-4 w-4" /> Claim Ruling Default
             </TransactionButton>
-          )}
+          </div>
+        )}
+
+      {/* Execute Ruling button (when phase is Ruled) */}
+      {dispute.phase === DisputePhase.Ruled && disputeId !== null && (
+        <div className="card">
+          <div className="flex items-center gap-2 mb-3">
+            <Gavel className="h-4 w-4 text-indigo-600" />
+            <p className="text-sm text-gray-700 font-medium">
+              A ruling has been submitted. Execute it to redistribute funds.
+            </p>
+          </div>
+          <TransactionButton
+            onClick={async () => {
+              setTxLoading(true);
+              try {
+                await execRuling(disputeId);
+                fetchDispute();
+              } catch {
+                // Error toasted by hook
+              } finally {
+                setTxLoading(false);
+              }
+            }}
+            isLoading={txLoading}
+            variant="primary"
+          >
+            <Gavel className="mr-1.5 h-4 w-4" /> Execute Ruling
+          </TransactionButton>
         </div>
       )}
     </div>

@@ -1,11 +1,17 @@
-import { ethers, run } from "hardhat";
+import { run } from "hardhat";
+import { upgrades } from "hardhat";
 
 /**
  * Verify script — verifies deployed contracts on Etherscan/Basescan.
  *
+ * For UUPS proxy contracts (DataAvailability, Reputation, Dispute, JobEscrow),
+ * we first resolve the implementation address from the proxy, then verify the
+ * implementation contract with empty constructor args (since all UUPS
+ * implementations use `constructor() { _disableInitializers(); }`).
+ *
  * Usage: npx hardhat run scripts/verify.ts --network baseSepolia
  *
- * Requires ETHERSCAN_API_KEY in .env
+ * Requires BASESCAN_API_KEY in .env
  */
 async function main() {
   // ── Load deployed contract addresses from environment ──
@@ -14,25 +20,25 @@ async function main() {
   const REPUTATION_ADDRESS = process.env.REPUTATION_ADDRESS;
   const DISPUTE_ADDRESS = process.env.DISPUTE_ADDRESS;
   const JOB_ESCROW_ADDRESS = process.env.JOB_ESCROW_ADDRESS;
-  const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS;
 
   if (
     !USDC_ADDRESS ||
     !DATA_AVAILABILITY_ADDRESS ||
     !REPUTATION_ADDRESS ||
     !DISPUTE_ADDRESS ||
-    !JOB_ESCROW_ADDRESS ||
-    !TREASURY_ADDRESS
+    !JOB_ESCROW_ADDRESS
   ) {
     console.error("Missing contract addresses in environment variables.");
-    console.error("Set: USDC_ADDRESS, DATA_AVAILABILITY_ADDRESS, REPUTATION_ADDRESS,");
-    console.error("      DISPUTE_ADDRESS, JOB_ESCROW_ADDRESS, TREASURY_ADDRESS");
+    console.error(
+      "Set: USDC_ADDRESS, DATA_AVAILABILITY_ADDRESS, REPUTATION_ADDRESS,"
+    );
+    console.error("      DISPUTE_ADDRESS, JOB_ESCROW_ADDRESS");
     process.exit(1);
   }
 
   console.log("Verifying contracts on block explorer...\n");
 
-  // 1. MockUSDC (no constructor args)
+  // 1. MockUSDC — standard (non-proxy) contract, no constructor args
   try {
     console.log("1. Verifying MockUSDC...");
     await run("verify:verify", {
@@ -44,58 +50,59 @@ async function main() {
     console.log("   ⚠️  MockUSDC:", e.message);
   }
 
-  // 2. DataAvailability (no constructor args)
-  try {
-    console.log("2. Verifying DataAvailability...");
-    await run("verify:verify", {
-      address: DATA_AVAILABILITY_ADDRESS,
-      constructorArguments: [],
-    });
-    console.log("   ✅ DataAvailability verified");
-  } catch (e: any) {
-    console.log("   ⚠️  DataAvailability:", e.message);
-  }
+  // 2–5. UUPS Proxy contracts
+  // For each proxy we:
+  //   a) Resolve the implementation address from the ERC-1967 storage slot
+  //   b) Verify the implementation (constructor has zero args: _disableInitializers)
+  //   c) Verify the proxy itself (ERC1967Proxy — usually auto-verified)
 
-  // 3. Reputation (no constructor args)
-  try {
-    console.log("3. Verifying Reputation...");
-    await run("verify:verify", {
-      address: REPUTATION_ADDRESS,
-      constructorArguments: [],
-    });
-    console.log("   ✅ Reputation verified");
-  } catch (e: any) {
-    console.log("   ⚠️  Reputation:", e.message);
-  }
+  const proxyContracts = [
+    { name: "DataAvailability", proxy: DATA_AVAILABILITY_ADDRESS },
+    { name: "Reputation", proxy: REPUTATION_ADDRESS },
+    { name: "Dispute", proxy: DISPUTE_ADDRESS },
+    { name: "JobEscrow", proxy: JOB_ESCROW_ADDRESS },
+  ];
 
-  // 4. Dispute (constructor: dataAvailability address)
-  try {
-    console.log("4. Verifying Dispute...");
-    await run("verify:verify", {
-      address: DISPUTE_ADDRESS,
-      constructorArguments: [DATA_AVAILABILITY_ADDRESS],
-    });
-    console.log("   ✅ Dispute verified");
-  } catch (e: any) {
-    console.log("   ⚠️  Dispute:", e.message);
-  }
+  for (let i = 0; i < proxyContracts.length; i++) {
+    const { name, proxy } = proxyContracts[i];
+    const idx = i + 2;
+    try {
+      console.log(`${idx}. Verifying ${name} (proxy: ${proxy})...`);
 
-  // 5. JobEscrow (constructor: usdc, dispute, reputation, dataAvailability, treasury)
-  try {
-    console.log("5. Verifying JobEscrow...");
-    await run("verify:verify", {
-      address: JOB_ESCROW_ADDRESS,
-      constructorArguments: [
-        USDC_ADDRESS,
-        DISPUTE_ADDRESS,
-        REPUTATION_ADDRESS,
-        DATA_AVAILABILITY_ADDRESS,
-        TREASURY_ADDRESS,
-      ],
-    });
-    console.log("   ✅ JobEscrow verified");
-  } catch (e: any) {
-    console.log("   ⚠️  JobEscrow:", e.message);
+      // Get implementation address from ERC-1967 storage slot
+      const implAddress =
+        await upgrades.erc1967.getImplementationAddress(proxy);
+      console.log(`   Implementation address: ${implAddress}`);
+
+      // Verify the implementation contract (no constructor args for UUPS)
+      await run("verify:verify", {
+        address: implAddress,
+        constructorArguments: [],
+      });
+      console.log(`   ✅ ${name} implementation verified`);
+
+      // Also verify the proxy contract itself
+      try {
+        await run("verify:verify", {
+          address: proxy,
+          constructorArguments: [],
+        });
+        console.log(`   ✅ ${name} proxy verified`);
+      } catch (proxyErr: any) {
+        // Proxy is often auto-verified or already verified — not critical
+        if (proxyErr.message?.includes("Already Verified")) {
+          console.log(`   ✅ ${name} proxy already verified`);
+        } else {
+          console.log(`   ⚠️  ${name} proxy: ${proxyErr.message}`);
+        }
+      }
+    } catch (e: any) {
+      if (e.message?.includes("Already Verified")) {
+        console.log(`   ✅ ${name} already verified`);
+      } else {
+        console.log(`   ⚠️  ${name}: ${e.message}`);
+      }
+    }
   }
 
   console.log("\n✅ Verification complete!");

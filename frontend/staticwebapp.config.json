@@ -8,7 +8,7 @@
     "X-Frame-Options": "DENY",
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.pinata.cloud https://*.pinata.cloud https://*.base.org https://*.infura.io https://*.alchemy.com wss://*.infura.io wss://*.alchemy.com; img-src 'self' data: https://gateway.pinata.cloud; font-src 'self' data:;"
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.pinata.cloud https://*.pinata.cloud https://*.mypinata.cloud https://*.base.org https://*.infura.io https://*.alchemy.com wss://*.infura.io wss://*.alchemy.com; img-src 'self' data: https://gateway.pinata.cloud https://*.mypinata.cloud; font-src 'self' data:;"
   },
   "mimeTypes": {
     ".json": "application/json"

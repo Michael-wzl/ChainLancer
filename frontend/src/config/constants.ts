@@ -5,8 +5,13 @@ import { ethers } from "ethers";
 /** Protocol fee: 2% (200 BPS) */
 export const PROTOCOL_FEE_BPS = 200;
 
-/** Freelancer deposit: 5% of total job value */
-export const FREELANCER_DEPOSIT_BPS = 500;
+/** Freelancer deposit BPS per freelancer tier */
+export const FREELANCER_DEPOSIT_BPS = {
+  New: 750, // 7.5%
+  Bronze: 500, // 5%
+  Silver: 250, // 2.5%
+  Gold: 100, // 1%
+} as const;
 
 /** Behavior bond BPS per client tier */
 export const BEHAVIOR_BOND_BPS = {

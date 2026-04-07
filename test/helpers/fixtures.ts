@@ -1,12 +1,12 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { MockUSDC, DataAvailability, Reputation, Dispute, JobEscrow } from "../../typechain-types";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 /**
  * Shared deployment fixture used by all tests.
- * Deploys all contracts, wires cross-references, and returns
+ * Deploys all contracts via UUPS proxies, wires cross-references, and returns
  * ready-to-use contract instances + signers.
  */
 export async function deployFullPlatformFixture() {
@@ -18,31 +18,64 @@ export async function deployFullPlatformFixture() {
   const DISPUTE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("DISPUTE_ROLE"));
   const PLATFORM_ADMIN = ethers.keccak256(ethers.toUtf8Bytes("PLATFORM_ADMIN"));
 
-  // 1. MockUSDC
+  // Admin transfer delay: 0 for tests (no need to wait)
+  const adminTransferDelay = 0;
+
+  // 1. MockUSDC (not upgradeable)
   const MockUSDC = await ethers.getContractFactory("MockUSDC");
   const usdc = await MockUSDC.deploy();
 
-  // 2. DataAvailability
+  // 2. DataAvailability (UUPS proxy)
   const DataAvailability = await ethers.getContractFactory("DataAvailability");
-  const dataAvailability = await DataAvailability.deploy();
+  const dataAvailability = (await upgrades.deployProxy(
+    DataAvailability,
+    [deployer.address, adminTransferDelay],
+    { kind: "uups" }
+  )) as unknown as DataAvailability;
+  await dataAvailability.waitForDeployment();
 
-  // 3. Reputation
+  // 3. Reputation (UUPS proxy)
   const ReputationFactory = await ethers.getContractFactory("Reputation");
-  const reputation = await ReputationFactory.deploy();
+  const reputation = (await upgrades.deployProxy(
+    ReputationFactory,
+    [deployer.address, adminTransferDelay],
+    { kind: "uups" }
+  )) as unknown as Reputation;
+  await reputation.waitForDeployment();
 
-  // 4. Dispute
+  // 4. Dispute (UUPS proxy)
   const DisputeFactory = await ethers.getContractFactory("Dispute");
-  const dispute = await DisputeFactory.deploy(await dataAvailability.getAddress());
+  const dispute = (await upgrades.deployProxy(
+    DisputeFactory,
+    [await dataAvailability.getAddress(), deployer.address, adminTransferDelay],
+    { kind: "uups", unsafeAllow: ["constructor"] }
+  )) as unknown as Dispute;
+  await dispute.waitForDeployment();
 
-  // 5. JobEscrow
-  const JobEscrowFactory = await ethers.getContractFactory("JobEscrow");
-  const jobEscrow = await JobEscrowFactory.deploy(
-    await usdc.getAddress(),
-    await dispute.getAddress(),
-    await reputation.getAddress(),
-    await dataAvailability.getAddress(),
-    treasury.address
-  );
+  // 5. JobEscrow (UUPS proxy) — requires linking JobEscrowLib
+  const JobEscrowLib = await ethers.getContractFactory("JobEscrowLib");
+  const jobEscrowLib = await JobEscrowLib.deploy();
+  await jobEscrowLib.waitForDeployment();
+
+  const JobEscrowFactory = await ethers.getContractFactory("JobEscrow", {
+    libraries: {
+      JobEscrowLib: await jobEscrowLib.getAddress(),
+    },
+  });
+  const jobEscrow = (await upgrades.deployProxy(
+    JobEscrowFactory,
+    [
+      await usdc.getAddress(),
+      await dispute.getAddress(),
+      await reputation.getAddress(),
+      await dataAvailability.getAddress(),
+      treasury.address,
+      deployer.address,
+      adminTransferDelay,
+    ],
+    { kind: "uups", unsafeAllow: ["constructor"], unsafeAllowLinkedLibraries: true }
+  )) as unknown as JobEscrow;
+  await jobEscrow.waitForDeployment();
 
   // 6. Wire cross-references
   await dispute.setJobEscrow(await jobEscrow.getAddress());
@@ -137,7 +170,7 @@ export async function advanceJobToActive(
 
   // Apply
   const proposalHash = ethers.keccak256(ethers.toUtf8Bytes("proposal"));
-  await jobEscrow.connect(freelancer).applyForJob(jobId, proposalHash);
+  await jobEscrow.connect(freelancer).applyForJob(jobId, proposalHash, "QmTestProposalCID");
 
   // Select
   const encryptedKey = ethers.toUtf8Bytes("encrypted-job-key");

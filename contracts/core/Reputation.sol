@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "../interfaces/IReputation.sol";
 import "../access/PlatformRoles.sol";
 import "../libraries/ReputationLib.sol";
@@ -9,7 +10,7 @@ import "../libraries/ReputationLib.sol";
 /// @title Reputation
 /// @notice Soulbound (non-transferable) on-chain reputation scores for clients and freelancers.
 ///         State can only be mutated by authorized callers (JobEscrow via ESCROW_ROLE).
-contract Reputation is IReputation, AccessControl {
+contract Reputation is IReputation, AccessControlDefaultAdminRulesUpgradeable, UUPSUpgradeable {
     using ReputationLib for *;
 
     // ── Structs ──
@@ -17,6 +18,7 @@ contract Reputation is IReputation, AccessControl {
         uint256 totalValueCompleted;     // Sum of V_i * m_i
         uint256 jobsCompleted;
         uint256 disputesLost;
+        uint256 cancellations;           // Tracks voluntary cancellation penalties (separate from disputesLost)
         uint256 reputationScore;         // Cached, recalculated on update
     }
 
@@ -27,6 +29,7 @@ contract Reputation is IReputation, AccessControl {
         uint256 jobsCancelledAfterSelection;  // C in the formula
         uint256 autoApproveCount;             // A in the formula
         uint256 disputesLost;                 // L in the formula
+        uint256 totalMilestoneCount;          // Actual milestone count across all completed jobs
         uint256 reputationScore;              // Cached
     }
 
@@ -39,9 +42,20 @@ contract Reputation is IReputation, AccessControl {
     event ClientScoreUpdated(address indexed user, uint256 newScore, uint256 totalValueCompleted);
     event TierChanged(address indexed user, Tier oldTier, Tier newTier);
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _disableInitializers();
     }
+
+    /// @notice Initializer replaces constructor for proxy pattern
+    /// @param initialAdmin The initial admin address
+    /// @param adminTransferDelay Delay (seconds) for admin transfer via AccessControlDefaultAdminRules
+    function initialize(address initialAdmin, uint48 adminTransferDelay) external initializer {
+        __AccessControlDefaultAdminRules_init(adminTransferDelay, initialAdmin);
+    }
+
+    /// @notice Authorize contract upgrades — restricted to DEFAULT_ADMIN_ROLE
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
     // ═══════════════════════════════════════════════════════════════
     //                    RESTRICTED FUNCTIONS
@@ -68,21 +82,19 @@ contract Reputation is IReputation, AccessControl {
     }
 
     /// @inheritdoc IReputation
-    function recordDisputeLoss(address user) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
-        // Could be either client or freelancer
-        FreelancerProfile storage fp = freelancerProfiles[user];
-        ClientProfile storage cp = clientProfiles[user];
+    function recordFreelancerDisputeLoss(address freelancer)
+        external override onlyRole(PlatformRoles.ESCROW_ROLE)
+    {
+        freelancerProfiles[freelancer].disputesLost += 1;
+        _recalculateFreelancerScore(freelancer);
+    }
 
-        // Increment disputes lost for whichever profile has activity
-        // In practice, the caller knows which role the user played
-        if (fp.totalValueCompleted > 0 || fp.jobsCompleted > 0) {
-            fp.disputesLost += 1;
-            _recalculateFreelancerScore(user);
-        }
-        if (cp.jobsPosted > 0) {
-            cp.disputesLost += 1;
-            _recalculateClientScore(user);
-        }
+    /// @inheritdoc IReputation
+    function recordClientDisputeLoss(address client)
+        external override onlyRole(PlatformRoles.ESCROW_ROLE)
+    {
+        clientProfiles[client].disputesLost += 1;
+        _recalculateClientScore(client);
     }
 
     /// @inheritdoc IReputation
@@ -104,16 +116,26 @@ contract Reputation is IReputation, AccessControl {
     }
 
     /// @inheritdoc IReputation
-    function recordJobCompleted(address client, uint256 totalValue) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
+    function recordJobCompleted(address client, uint256 totalValue, uint256 milestoneCount) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
         ClientProfile storage cp = clientProfiles[client];
         cp.jobsCompleted += 1;
         cp.totalValueCompleted += totalValue;
+        cp.totalMilestoneCount += milestoneCount;
         _recalculateClientScore(client);
     }
 
     /// @inheritdoc IReputation
+    /// @dev L-4: Now recalculates score so the jobsCompleted increment is reflected.
     function recordFreelancerJobCompleted(address freelancer) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
         freelancerProfiles[freelancer].jobsCompleted += 1;
+        _recalculateFreelancerScore(freelancer);
+    }
+
+    /// @inheritdoc IReputation
+    function recordFreelancerCancellation(address freelancer) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
+        // Increment dedicated cancellation counter (not disputesLost)
+        freelancerProfiles[freelancer].cancellations += 1;
+        _recalculateFreelancerScore(freelancer);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -121,6 +143,10 @@ contract Reputation is IReputation, AccessControl {
     // ═══════════════════════════════════════════════════════════════
 
     /// @inheritdoc IReputation
+    /// @dev L-1: Tier thresholds use strict greater-than (> 90, > 75, > 50) intentionally.
+    ///      This means exactly 90% completion does NOT qualify for Gold — the client must
+    ///      exceed the threshold. Integer division truncation is acceptable here because
+    ///      the thresholds are designed as "strictly above" requirements.
     function getClientTier(address user) external view override returns (Tier) {
         ClientProfile storage p = clientProfiles[user];
 
@@ -156,6 +182,42 @@ contract Reputation is IReputation, AccessControl {
     }
 
     /// @inheritdoc IReputation
+    /// @dev DESIGN DEVIATION (G-3): The design spec (§5.5) lists only value
+    ///      thresholds for freelancer tiers. This implementation ALSO requires
+    ///      a completion ratio (50%/75%/90% for Bronze/Silver/Gold) to prevent
+    ///      low-quality freelancers from advancing by volume alone.
+    ///      This is an intentional enhancement.
+    /// @dev L-1: Tier thresholds use strict greater-than (> 90, > 75, > 50) intentionally.
+    ///      Exactly 90% completion does NOT qualify for Gold — the freelancer must exceed it.
+    function getFreelancerTier(address user) external view override returns (Tier) {
+        FreelancerProfile storage p = freelancerProfiles[user];
+        uint256 negativeOutcomes = p.disputesLost + p.cancellations;
+
+        if (
+            p.totalValueCompleted >= 50_000e6 &&
+            p.jobsCompleted > 0 &&
+            (p.jobsCompleted * 100 / (p.jobsCompleted + negativeOutcomes)) > 90
+        ) {
+            return Tier.Gold;
+        }
+        if (
+            p.totalValueCompleted >= 10_000e6 &&
+            p.jobsCompleted > 0 &&
+            (p.jobsCompleted * 100 / (p.jobsCompleted + negativeOutcomes)) > 75
+        ) {
+            return Tier.Silver;
+        }
+        if (
+            p.totalValueCompleted >= 1_000e6 &&
+            p.jobsCompleted > 0 &&
+            (p.jobsCompleted * 100 / (p.jobsCompleted + negativeOutcomes)) > 50
+        ) {
+            return Tier.Bronze;
+        }
+        return Tier.New;
+    }
+
+    /// @inheritdoc IReputation
     function getClientScore(address user) external view override returns (uint256) {
         return clientProfiles[user].reputationScore;
     }
@@ -165,10 +227,11 @@ contract Reputation is IReputation, AccessControl {
         uint256 totalValueCompleted,
         uint256 jobsCompleted,
         uint256 disputesLost,
+        uint256 cancellations,
         uint256 reputationScore
     ) {
         FreelancerProfile storage p = freelancerProfiles[user];
-        return (p.totalValueCompleted, p.jobsCompleted, p.disputesLost, p.reputationScore);
+        return (p.totalValueCompleted, p.jobsCompleted, p.disputesLost, p.cancellations, p.reputationScore);
     }
 
     /// @notice Get the full client profile
@@ -179,6 +242,7 @@ contract Reputation is IReputation, AccessControl {
         uint256 jobsCancelledAfterSelection,
         uint256 autoApproveCount,
         uint256 disputesLost,
+        uint256 totalMilestoneCount,
         uint256 reputationScore
     ) {
         ClientProfile storage p = clientProfiles[user];
@@ -189,6 +253,7 @@ contract Reputation is IReputation, AccessControl {
             p.jobsCancelledAfterSelection,
             p.autoApproveCount,
             p.disputesLost,
+            p.totalMilestoneCount,
             p.reputationScore
         );
     }
@@ -201,7 +266,8 @@ contract Reputation is IReputation, AccessControl {
         FreelancerProfile storage p = freelancerProfiles[user];
         uint256 newScore = ReputationLib.calculateFreelancerScore(
             p.totalValueCompleted,
-            p.disputesLost
+            p.disputesLost,
+            p.cancellations
         );
         p.reputationScore = newScore;
         emit FreelancerScoreUpdated(user, newScore, p.totalValueCompleted);
@@ -210,8 +276,8 @@ contract Reputation is IReputation, AccessControl {
     function _recalculateClientScore(address user) internal {
         ClientProfile storage p = clientProfiles[user];
 
-        // Capture old tier before recalculation
-        Tier oldTier = this.getClientTier(user);
+        // L-5: Use internal tier lookup to avoid external self-call gas overhead
+        Tier oldTier = _getClientTierInternal(user);
 
         uint256 newScore = ReputationLib.calculateClientScore(
             p.totalValueCompleted,
@@ -225,16 +291,45 @@ contract Reputation is IReputation, AccessControl {
         emit ClientScoreUpdated(user, newScore, p.totalValueCompleted);
 
         // Check if tier changed and emit event
-        Tier newTier = this.getClientTier(user);
+        Tier newTier = _getClientTierInternal(user);
         if (newTier != oldTier) {
             emit TierChanged(user, oldTier, newTier);
         }
     }
 
+    /// @dev L-5: Internal version of getClientTier to avoid external self-call gas overhead
+    function _getClientTierInternal(address user) internal view returns (Tier) {
+        ClientProfile storage p = clientProfiles[user];
+
+        if (
+            p.totalValueCompleted >= 50_000e6 &&
+            p.jobsPosted > 0 &&
+            (p.jobsCompleted * 100 / p.jobsPosted) > 90 &&
+            _autoApproveRate(p) < 10
+        ) {
+            return Tier.Gold;
+        }
+        if (
+            p.totalValueCompleted >= 10_000e6 &&
+            p.jobsPosted > 0 &&
+            (p.jobsCompleted * 100 / p.jobsPosted) > 75 &&
+            _autoApproveRate(p) < 20
+        ) {
+            return Tier.Silver;
+        }
+        if (
+            p.totalValueCompleted >= 1_000e6 &&
+            p.jobsPosted > 0 &&
+            (p.jobsCompleted * 100 / p.jobsPosted) > 50
+        ) {
+            return Tier.Bronze;
+        }
+        return Tier.New;
+    }
+
     /// @dev Calculate auto-approve rate as a percentage (0-100)
     function _autoApproveRate(ClientProfile storage p) internal view returns (uint256) {
-        uint256 totalMilestones = p.jobsCompleted * 3; // Approximate: assume avg 3 milestones per job
-        if (totalMilestones == 0) return 0;
-        return (p.autoApproveCount * 100) / totalMilestones;
+        if (p.totalMilestoneCount == 0) return 0;
+        return (p.autoApproveCount * 100) / p.totalMilestoneCount;
     }
 }

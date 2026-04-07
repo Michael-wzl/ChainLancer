@@ -72,7 +72,7 @@ async function main() {
 
   // Freelancer applies
   const proposalHash1 = ethers.keccak256(ethers.toUtf8Bytes("proposal-for-web-app"));
-  await jobEscrow.connect(freelancer1).applyForJob(0, proposalHash1);
+  await jobEscrow.connect(freelancer1).applyForJob(0, proposalHash1, "QmProposalCID1");
   console.log("   Freelancer applied to Job 1");
 
   // Client selects freelancer

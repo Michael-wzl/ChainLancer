@@ -20,6 +20,10 @@ export interface JobData {
   milestoneCount: number;
   milestonesCompleted: number;
   state: JobState;
+  /** Whether a mutual cancellation request is currently pending */
+  cancellationRequested: boolean;
+  /** Address of the party who requested cancellation (if any) */
+  cancellationRequestor: string | null;
 }
 
 export interface MilestoneData {
@@ -27,7 +31,6 @@ export interface MilestoneData {
   deadline: number;
   submittedAt: number;
   resolvedAt: number;
-  remainingReviewTime: number;
   deliverableHash: string;
   deliverableCID: string;
   status: MilestoneStatus;
@@ -37,6 +40,7 @@ export interface MilestoneData {
 export interface ApplicationData {
   freelancer: string;
   proposalHash: string;
+  proposalCID: string;
   appliedAt: number;
 }
 
@@ -106,11 +110,10 @@ export function useJobDetail(jobId: number | null) {
         deadline: Number(ms[1]),
         submittedAt: Number(ms[2]),
         resolvedAt: Number(ms[3]),
-        remainingReviewTime: Number(ms[4]),
-        deliverableHash: ms[5] as string,
-        deliverableCID: ms[6] as string,
-        status: Number(ms[7]) as MilestoneStatus,
-        fundsProcessed: ms[8] as boolean,
+        deliverableHash: ms[4] as string,
+        deliverableCID: ms[5] as string,
+        status: Number(ms[6]) as MilestoneStatus,
+        fundsProcessed: ms[7] as boolean,
       }));
       setMilestones(parsedMs);
 
@@ -118,7 +121,8 @@ export function useJobDetail(jobId: number | null) {
       const parsedApps: ApplicationData[] = appData.map((app: unknown[]) => ({
         freelancer: app[0] as string,
         proposalHash: app[1] as string,
-        appliedAt: Number(app[2]),
+        proposalCID: app[2] as string,
+        appliedAt: Number(app[3]),
       }));
       setApplications(parsedApps);
     } catch (err) {
@@ -153,6 +157,19 @@ async function fetchSingleJob(
       return null;
     }
 
+    // BUG-001/002/003 fix: fetch cancellation request state
+    let cancellationRequested = false;
+    let cancellationRequestor: string | null = null;
+    try {
+      const cancelReq = await contract.cancelRequests(jobId);
+      cancellationRequested = cancelReq.active as boolean;
+      if (cancellationRequested) {
+        cancellationRequestor = cancelReq.requestedBy as string;
+      }
+    } catch {
+      // cancelRequests may not exist on older contract versions; ignore
+    }
+
     return {
       jobId,
       client,
@@ -168,6 +185,8 @@ async function fetchSingleJob(
       activatedAt: Number(BigInt(raw.activatedAt)),
       milestoneCount: Number(BigInt(raw.milestoneCount)),
       milestonesCompleted: Number(BigInt(raw.milestonesCompleted)),
+      cancellationRequested,
+      cancellationRequestor,
     };
   } catch {
     return null;

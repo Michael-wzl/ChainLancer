@@ -130,10 +130,10 @@ describe("hooks/useJobEscrow", () => {
     const { result } = renderHook(() => useJobEscrow());
 
     await act(async () => {
-      await result.current.applyForJob(1, "0xproposalhash");
+      await result.current.applyForJob(1, "0xproposalhash", "QmProposalCID");
     });
 
-    expect(mockContracts.jobEscrow.applyForJob).toHaveBeenCalledWith(1, "0xproposalhash");
+    expect(mockContracts.jobEscrow.applyForJob).toHaveBeenCalledWith(1, "0xproposalhash", "QmProposalCID");
     expect(toast.success).toHaveBeenCalledWith("Application submitted!", { id: "tx" });
   });
 

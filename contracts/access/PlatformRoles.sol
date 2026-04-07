@@ -16,6 +16,9 @@ library PlatformRoles {
     /// @notice Granted to judge address(es)
     bytes32 public constant PLATFORM_JUDGE = keccak256("PLATFORM_JUDGE");
 
-    /// @notice Granted to the protocol treasury address
+    /// @notice Granted to the protocol treasury address.
+    /// @dev Reserved for future governance features such as treasury-controlled
+    ///      fee adjustments, protocol parameter voting, or fund distribution.
+    ///      Currently unused in access control checks — see audit finding I-1.
     bytes32 public constant PROTOCOL_TREASURY = keccak256("PROTOCOL_TREASURY");
 }

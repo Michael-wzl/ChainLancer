@@ -3,3 +3,4 @@ export { encrypt, decrypt, encryptFile, decryptFile } from "./aes";
 export type { EncryptedPayload } from "./aes";
 export { encryptForRecipient, decryptWithPrivateKey, encryptedKeyToHex, hexToEncryptedKey } from "./keyExchange";
 export { computeAgreementHash, computeContentHash } from "./hash";
+export { recoverPublicKey, eciesEncrypt, eciesDecrypt } from "./ecies";

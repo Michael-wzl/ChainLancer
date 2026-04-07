@@ -1,15 +1,50 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Coins, CheckCircle } from "lucide-react";
 import { useMockUSDC } from "../../hooks/useMockUSDC";
 import { useWallet } from "../../contexts/WalletContext";
 import { TransactionButton } from "../common/TransactionButton";
 import { parseUSDC, formatUSDC } from "../../utils/format";
+import { getTargetNetwork } from "../../config/networks";
+import { getContractAddresses } from "../../config/contracts";
+
+/** Networks where the faucet is available (MockUSDC deployed) */
+const FAUCET_NETWORKS = new Set(["Hardhat Local", "Base Sepolia", "Sepolia"]);
 
 export function FaucetPanel() {
   const { address } = useWallet();
-  const { mint, approveJobEscrow, isLoading } = useMockUSDC();
+  const { mint, approveJobEscrow, getAllowance, isLoading } = useMockUSDC();
   const [mintAmount, setMintAmount] = useState("10000");
   const [approved, setApproved] = useState(false);
+  const [checkingAllowance, setCheckingAllowance] = useState(false);
+
+  // Check on-chain allowance whenever the connected address changes
+  const checkAllowance = useCallback(async () => {
+    if (!address) {
+      setApproved(false);
+      return;
+    }
+    const addresses = getContractAddresses();
+    if (!addresses.JobEscrow) {
+      setApproved(false);
+      return;
+    }
+    setCheckingAllowance(true);
+    try {
+      const allowance = await getAllowance(addresses.JobEscrow, address);
+      // Consider "approved" if allowance is greater than a reasonable threshold
+      // (e.g. > 1,000,000 USDC = 1_000_000 * 10^6)
+      setApproved(allowance > 1_000_000_000_000n);
+    } catch (err) {
+      console.error("Failed to check allowance:", err);
+      setApproved(false);
+    } finally {
+      setCheckingAllowance(false);
+    }
+  }, [address, getAllowance]);
+
+  useEffect(() => {
+    checkAllowance();
+  }, [checkAllowance]);
 
   const handleMint = async () => {
     if (!address) return;
@@ -19,8 +54,15 @@ export function FaucetPanel() {
 
   const handleApprove = async () => {
     await approveJobEscrow();
-    setApproved(true);
+    // Re-check on-chain allowance after approval
+    await checkAllowance();
   };
+
+  // Only show faucet on testnets where MockUSDC is deployed
+  const network = getTargetNetwork();
+  if (!FAUCET_NETWORKS.has(network.name)) {
+    return null;
+  }
 
   return (
     <div className="card bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
@@ -56,7 +98,7 @@ export function FaucetPanel() {
         <div>
           <TransactionButton
             onClick={handleApprove}
-            isLoading={isLoading}
+            isLoading={isLoading || checkingAllowance}
             variant="secondary"
             disabled={approved}
           >

@@ -17,24 +17,30 @@ import { useWallet } from "../contexts/WalletContext";
 import { useContracts } from "../contexts/ContractContext";
 import { useJobDetail } from "../hooks/useJobList";
 import { useJobEscrow } from "../hooks/useJobEscrow";
+import { useMockUSDC } from "../hooks/useMockUSDC";
 import { JobStateBadge } from "../components/common/StatusBadge";
 import { MilestoneTimeline } from "../components/job/MilestoneTimeline";
 import { MilestoneActions } from "../components/job/MilestoneActions";
 import { ApplicationList } from "../components/job/ApplicationList";
 import { DisputeBanner } from "../components/dispute/DisputeBanner";
 import { TransactionButton } from "../components/common/TransactionButton";
-import { getGatewayUrl, retrieveBinaryFromIPFS } from "../ipfs/gateway";
+import { getGatewayUrl, retrieveBinaryFromIPFS, retrieveFromIPFS } from "../ipfs/gateway";
 import {
   formatUSDC,
   formatDate,
   formatReviewTimeout,
   truncateAddress,
 } from "../utils/format";
-import { getJobKey } from "../utils/storage";
+import { getJobKey, storeJobKey } from "../utils/storage";
 import { getJobTitle, storeJobTitle } from "../utils/storage";
 import { decrypt } from "../crypto/aes";
-import { encryptForRecipient } from "../crypto/keyExchange";
-import { JobState, MilestoneStatus, DisputePhase } from "../config/constants";
+import { hexToBuffer } from "../crypto/jobKey";
+import { encryptForRecipient, decryptWithPrivateKey, hexToEncryptedKey } from "../crypto/keyExchange";
+import { JobState, MilestoneStatus, DisputePhase, T_ACCEPTANCE, T_STAKE, FREELANCER_DEPOSIT_BPS, Tier } from "../config/constants";
+import { useReputation } from "../hooks/useReputation";
+import { useBlockTimestamp } from "../hooks/useBlockTimestamp";
+import { getContractAddresses } from "../config/contracts";
+import toast from "react-hot-toast";
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
@@ -44,6 +50,7 @@ export default function JobDetail() {
   const { job, milestones, applications, loading, refresh } = useJobDetail(jobId);
   const {
     selectFreelancer,
+    reselectFreelancer,
     confirmAndStake,
     rejectOffer,
     cancelJob,
@@ -54,13 +61,92 @@ export default function JobDetail() {
     expireOffer,
     isLoading: txLoading,
   } = useJobEscrow();
-  const { readContracts } = useContracts();
+  const { readContracts, contracts } = useContracts();
+  const { getBalance, getAllowance } = useMockUSDC();
+
+  const { getFreelancerProfile } = useReputation();
+
+  // BUG-005 fix: Use blockchain time instead of Date.now() for time-dependent conditions
+  const nowTimestamp = useBlockTimestamp();
+
+  // Estimate freelancer deposit from tier when on-chain value is still 0 (before confirmAndStake)
+  const [estimatedDeposit, setEstimatedDeposit] = useState<bigint | null>(null);
+  useEffect(() => {
+    async function estimateDeposit() {
+      if (!job || !readContracts.reputation) return;
+      // Only estimate when deposit hasn't been set on-chain yet
+      if (job.freelancerDeposit > 0n) {
+        setEstimatedDeposit(null);
+        return;
+      }
+      // Determine whose tier to look up
+      const freelancerAddr = job.freelancer;
+      if (!freelancerAddr || freelancerAddr === "0x0000000000000000000000000000000000000000") {
+        // No freelancer selected yet — estimate with "New" tier as default
+        const bps = BigInt(FREELANCER_DEPOSIT_BPS.New);
+        setEstimatedDeposit((job.totalValue * bps) / 10000n);
+        return;
+      }
+      try {
+        const tier = Number(await readContracts.reputation.getFreelancerTier(freelancerAddr)) as Tier;
+        const tierKey = (["New", "Bronze", "Silver", "Gold"] as const)[tier];
+        const bps = BigInt(FREELANCER_DEPOSIT_BPS[tierKey]);
+        setEstimatedDeposit((job.totalValue * bps) / 10000n);
+      } catch {
+        const bps = BigInt(FREELANCER_DEPOSIT_BPS.New);
+        setEstimatedDeposit((job.totalValue * bps) / 10000n);
+      }
+    }
+    estimateDeposit();
+  }, [job, readContracts.reputation]);
+
+  // The display deposit: use on-chain value if set, otherwise use estimate
+  const displayDeposit = job ? (job.freelancerDeposit > 0n ? job.freelancerDeposit : (estimatedDeposit ?? 0n)) : 0n;
 
   // Bug #3: Fetch the actual IPFS CID from DataAvailability contract
   const [agreementCID, setAgreementCID] = useState<string | null>(null);
 
-  const jobKeyHex = jobId !== null ? getJobKey(jobId) : null;
+  // BUG FIX: Use state for jobKeyHex so it updates reactively after auto-decryption
+  const [jobKeyHex, setJobKeyHex] = useState<string | null>(
+    jobId !== null && address ? getJobKey(jobId, address) : null
+  );
   const cachedTitle = jobId !== null ? getJobTitle(jobId) : null;
+
+  // Keep jobKeyHex in sync when jobId or address changes
+  useEffect(() => {
+    setJobKeyHex(jobId !== null && address ? getJobKey(jobId, address) : null);
+  }, [jobId, address]);
+
+  // Auto-decrypt job key for selected freelancer who doesn't have it locally
+  useEffect(() => {
+    async function autoDecryptJobKey() {
+      if (jobKeyHex) return; // already have it
+      if (!job || !address || !readContracts.jobEscrow) return;
+      if (job.freelancer.toLowerCase() !== address.toLowerCase()) return;
+      // Only attempt in states where the freelancer is confirmed
+      if (job.state !== JobState.Active && job.state !== JobState.Applications) return;
+
+      try {
+        const raw = await readContracts.jobEscrow.jobs(jobId);
+        const encKeyHex = raw.encryptedKeyForFreelancer;
+        if (!encKeyHex || encKeyHex === "0x") return;
+
+        const encryptedBytes = hexToEncryptedKey(encKeyHex);
+        if (encryptedBytes.length === 0) return;
+
+        const decryptedKeyHex = await decryptWithPrivateKey(encryptedBytes);
+        if (decryptedKeyHex && jobId !== null) {
+          storeJobKey(jobId, decryptedKeyHex, address);
+          // Update reactive state so UI immediately reflects the new key
+          setJobKeyHex(decryptedKeyHex);
+          refresh();
+        }
+      } catch (err) {
+        console.debug("Auto-decrypt job key failed (expected if not selected):", err);
+      }
+    }
+    autoDecryptJobKey();
+  }, [job, address, jobId, jobKeyHex, readContracts.jobEscrow]);
 
   // Agreement viewer state
   const [showAgreementModal, setShowAgreementModal] = useState(false);
@@ -75,9 +161,36 @@ export default function JobDetail() {
     setAgreementLoading(true);
     setAgreementError(null);
     try {
-      const encrypted = await retrieveBinaryFromIPFS(agreementCID);
-      if (jobKeyHex) {
-        const plaintext = await decrypt(encrypted, jobKeyHex);
+      // BUG FIX: Re-read key from localStorage as a fallback,
+      // in case the state hasn't updated yet after auto-decryption
+      const effectiveKey = jobKeyHex ?? (jobId !== null && address ? getJobKey(jobId, address) : null);
+      if (effectiveKey && !jobKeyHex) {
+        setJobKeyHex(effectiveKey);
+      }
+
+      // Try to fetch as text first to detect JSON envelope format
+      const rawText = await retrieveFromIPFS(agreementCID);
+      let encrypted: Uint8Array | null = null;
+      let envelopeContent: Record<string, unknown> | null = null;
+
+      try {
+        const parsed = JSON.parse(rawText);
+        // Handle Pinata-wrapped response
+        envelopeContent = (parsed.pinataContent ?? parsed) as Record<string, unknown>;
+        if (envelopeContent.version && envelopeContent.encrypted) {
+          // New envelope format: { version, salt, encrypted (hex), publicSummary? }
+          encrypted = hexToBuffer(envelopeContent.encrypted as string);
+        } else {
+          // Unknown JSON format — try binary fallback
+          encrypted = await retrieveBinaryFromIPFS(agreementCID);
+        }
+      } catch {
+        // Not JSON — legacy raw binary format (IV || ciphertext)
+        encrypted = await retrieveBinaryFromIPFS(agreementCID);
+      }
+
+      if (effectiveKey && encrypted) {
+        const plaintext = await decrypt(encrypted, effectiveKey);
         setAgreementText(plaintext);
         // Bug #4 fix: cache the title from the decrypted agreement
         try {
@@ -88,8 +201,18 @@ export default function JobDetail() {
         } catch {
           // not JSON, skip title caching
         }
+      } else if (envelopeContent?.publicSummary) {
+        // No decryption key — show the unencrypted publicSummary from the envelope
+        const summary = envelopeContent.publicSummary;
+        setAgreementText(JSON.stringify(summary));
+        // Cache title from public summary
+        try {
+          const s = summary as Record<string, unknown>;
+          if (s.title && jobId !== null) {
+            storeJobTitle(jobId, s.title as string);
+          }
+        } catch { /* ignore */ }
       } else {
-        // No key available — offer raw IPFS link as fallback
         setAgreementError("No decryption key found for this job. The agreement is encrypted.");
       }
     } catch (err) {
@@ -105,7 +228,7 @@ export default function JobDetail() {
     } finally {
       setAgreementLoading(false);
     }
-  }, [agreementCID, agreementText, jobKeyHex]);
+  }, [agreementCID, agreementText, jobKeyHex, jobId, address]);
   useEffect(() => {
     async function fetchAgreementCID() {
       if (!readContracts.dataAvailability || jobId === null) return;
@@ -130,19 +253,14 @@ export default function JobDetail() {
       .map((ms, idx) => ({ ms, idx }))
       .filter((m) => m.ms.status === MilestoneStatus.Disputed);
     const phases: Record<number, DisputePhase> = {};
-    if (disputed.length > 0) {
+    for (const { idx } of disputed) {
       try {
-        // Bug #3 fix: resolve disputeId from JobEscrow, then query disputes(disputeId)
-        const disputeId = Number(await readContracts.jobEscrow.disputeIds(jobId));
+        // Resolve disputeId per milestone from the nested mapping disputeIds(jobId, milestoneIdx)
+        const disputeId = Number(await readContracts.jobEscrow.disputeIds(jobId, idx));
         const info = await readContracts.dispute.disputes(disputeId);
-        const phase = Number(info.phase) as DisputePhase;
-        for (const { idx } of disputed) {
-          phases[idx] = phase;
-        }
+        phases[idx] = Number(info.phase) as DisputePhase;
       } catch {
-        for (const { idx } of disputed) {
-          phases[idx] = DisputePhase.Evidence;
-        }
+        phases[idx] = DisputePhase.Evidence;
       }
     }
     setDisputePhases(phases);
@@ -280,9 +398,11 @@ export default function JobDetail() {
             </p>
           </div>
           <div className="rounded-lg bg-blue-50 p-2">
-            <p className="text-xs text-gray-400">Freelancer Deposit</p>
+            <p className="text-xs text-gray-400">
+              Freelancer Deposit{job.freelancerDeposit === 0n && estimatedDeposit ? " (est.)" : ""}
+            </p>
             <p className="font-semibold text-blue-700 text-sm">
-              {formatUSDC(job.freelancerDeposit)}
+              {formatUSDC(displayDeposit)}
             </p>
           </div>
           <div className="rounded-lg bg-purple-50 p-2">
@@ -293,6 +413,22 @@ export default function JobDetail() {
           </div>
         </div>
       </div>
+
+      {/* BUG-004 fix: Cancellation status banner */}
+      {job.state === JobState.Active && job.cancellationRequested && (
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-yellow-600" />
+            <p className="text-sm font-medium text-yellow-800">
+              {job.cancellationRequestor?.toLowerCase() === address?.toLowerCase()
+                ? "You have requested cancellation. Waiting for the counterparty to accept."
+                : job.cancellationRequestor?.toLowerCase() === job.client.toLowerCase()
+                  ? "The client has requested cancellation. You may accept or continue working."
+                  : "The freelancer has requested cancellation. You may accept or continue working."}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Dispute banners */}
       {disputedMilestones.map(({ ms, idx }) => (
@@ -314,16 +450,61 @@ export default function JobDetail() {
             <ApplicationList
               applications={applications}
               onSelect={async (freelancerAddr) => {
-                // Bug #8 fix: encrypt the job key for the freelancer
-                const keyHex = getJobKey(job.jobId);
+                // Encrypt the job key for the freelancer using their on-chain pubkey
+                const keyHex = getJobKey(job.jobId, address ?? undefined);
                 if (!keyHex) {
                   throw new Error("No job key found. Cannot select freelancer without encryption key.");
                 }
-                const encryptedKey = await encryptForRecipient(keyHex, freelancerAddr);
+                // Look up freelancer's encryption public key from contract
+                const freelancerPubKey: string = await readContracts.jobEscrow!.encryptionPubKeys(freelancerAddr);
+                if (!freelancerPubKey || freelancerPubKey === "0x") {
+                  throw new Error("Freelancer has not registered an encryption key.");
+                }
+                const encryptedKey = await encryptForRecipient(keyHex, freelancerPubKey);
                 await selectFreelancer(job.jobId, freelancerAddr, encryptedKey);
                 refresh();
               }}
+              onReselect={async (freelancerAddr) => {
+                const keyHex = getJobKey(job.jobId, address ?? undefined);
+                if (!keyHex) {
+                  throw new Error("No job key found. Cannot reselect freelancer without encryption key.");
+                }
+                const freelancerPubKey: string = await readContracts.jobEscrow!.encryptionPubKeys(freelancerAddr);
+                if (!freelancerPubKey || freelancerPubKey === "0x") {
+                  throw new Error("Freelancer has not registered an encryption key.");
+                }
+                const encryptedKey = await encryptForRecipient(keyHex, freelancerPubKey);
+                await reselectFreelancer(job.jobId, freelancerAddr, encryptedKey);
+                refresh();
+              }}
+              selectedFreelancer={job.freelancer}
               isSelecting={txLoading}
+              userAddress={address ?? undefined}
+              isClient={true}
+              jobId={job.jobId}
+              selectedAt={job.selectedAt}
+              nowTimestamp={nowTimestamp}
+            />
+          </div>
+        )}
+
+      {/* Applications visible to freelancer who applied (can see own proposal) */}
+      {(job.state === JobState.Open || job.state === JobState.Applications) &&
+        !isClient &&
+        alreadyApplied && (
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-800 mb-3">
+              Your Application
+            </h2>
+            <ApplicationList
+              applications={applications.filter(
+                (a) => a.freelancer.toLowerCase() === address?.toLowerCase()
+              )}
+              onSelect={() => {}}
+              isSelecting={false}
+              userAddress={address ?? undefined}
+              isClient={false}
+              jobId={job.jobId}
             />
           </div>
         )}
@@ -351,11 +532,36 @@ export default function JobDetail() {
         <div className="card bg-blue-50 border-blue-200">
           <h3 className="font-semibold text-blue-900 mb-2">You&apos;ve been selected!</h3>
           <p className="text-sm text-blue-700 mb-3">
-            Stake your freelancer deposit ({formatUSDC(job.freelancerDeposit)}) to activate the job.
+            Stake your freelancer deposit ({formatUSDC(displayDeposit)}) to activate the job.
           </p>
           <div className="flex gap-3">
             <TransactionButton
               onClick={async () => {
+                // Pre-flight: check stake window hasn't expired
+                if (nowTimestamp > job.selectedAt + T_STAKE) {
+                  toast.error(
+                    "The stake window has expired. The client may need to reselect you."
+                  );
+                  refresh();
+                  return;
+                }
+                // Use estimated deposit for pre-flight checks (on-chain value is 0 until confirmAndStake executes)
+                const depositAmount = displayDeposit;
+                const balance = await getBalance();
+                if (balance < depositAmount) {
+                  toast.error(
+                    `Insufficient USDC balance. You have ${formatUSDC(balance)} but need ${formatUSDC(depositAmount)}. Visit the Wallet page to get test USDC.`
+                  );
+                  return;
+                }
+                const contractAddresses = getContractAddresses();
+                const allowance = await getAllowance(contractAddresses.JobEscrow);
+                if (allowance < depositAmount) {
+                  toast.error(
+                    `Insufficient USDC allowance. Please approve JobEscrow to spend your USDC first via the Wallet page.`
+                  );
+                  return;
+                }
                 await confirmAndStake(job.jobId);
                 refresh();
               }}
@@ -404,24 +610,48 @@ export default function JobDetail() {
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">Job Actions</h2>
           <div className="flex flex-wrap gap-3">
-            {/* Cancel (client, pre-active) */}
+            {/* Cancel (client, pre-active) — disabled when a freelancer has a pending offer */}
             {isClient &&
               (job.state === JobState.Open ||
-                job.state === JobState.Applications) && (
-                <TransactionButton
-                  onClick={async () => {
-                    await cancelJob(job.jobId);
-                    refresh();
-                  }}
-                  isLoading={txLoading}
-                  variant="danger"
-                >
-                  <XCircle className="mr-1.5 h-4 w-4" /> Cancel Job
-                </TransactionButton>
-              )}
+                job.state === JobState.Applications) && (() => {
+                const hasPendingOffer =
+                  job.freelancer !== "0x0000000000000000000000000000000000000000" &&
+                  job.selectedAt > 0 &&
+                  nowTimestamp <= job.selectedAt + T_STAKE;
+                return (
+                  <div className="flex flex-col">
+                    <TransactionButton
+                      onClick={async () => {
+                        if (hasPendingOffer) {
+                          toast.error(
+                            "Cannot cancel while a freelancer has a pending offer. Wait for them to confirm or for the offer to expire."
+                          );
+                          return;
+                        }
+                        const confirmed = window.confirm(
+                          "Are you sure you want to cancel this job? This action cannot be undone."
+                        );
+                        if (!confirmed) return;
+                        await cancelJob(job.jobId);
+                        refresh();
+                      }}
+                      isLoading={txLoading}
+                      variant="danger"
+                      disabled={hasPendingOffer}
+                    >
+                      <XCircle className="mr-1.5 h-4 w-4" /> Cancel Job
+                    </TransactionButton>
+                    {hasPendingOffer && (
+                      <p className="text-xs text-yellow-600 mt-1">
+                        A freelancer has a pending offer — cancellation is blocked until the offer expires or is rejected.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
-            {/* Request cancellation (active) */}
-            {job.state === JobState.Active && (
+            {/* Request cancellation (active) — BUG-003 fix: hide when request already pending */}
+            {job.state === JobState.Active && !job.cancellationRequested && (
               <TransactionButton
                 onClick={async () => {
                   await requestCancellation(job.jobId);
@@ -434,8 +664,10 @@ export default function JobDetail() {
               </TransactionButton>
             )}
 
-            {/* Accept cancellation */}
-            {job.state === JobState.Active && (
+            {/* Accept cancellation — BUG-001/002 fix: only show when cancellation is pending AND user is counterparty */}
+            {job.state === JobState.Active &&
+              job.cancellationRequested &&
+              job.cancellationRequestor?.toLowerCase() !== address?.toLowerCase() && (
               <TransactionButton
                 onClick={async () => {
                   await acceptCancellation(job.jobId);
@@ -459,22 +691,11 @@ export default function JobDetail() {
               <DollarSign className="mr-1.5 h-4 w-4" /> Withdraw Funds
             </TransactionButton>
 
-            {/* Expire offer */}
-            {isClient && job.state === JobState.Applications && (
-              <TransactionButton
-                onClick={async () => {
-                  await expireOffer(job.jobId);
-                  refresh();
-                }}
-                isLoading={txLoading}
-                variant="secondary"
-              >
-                <AlertTriangle className="mr-1.5 h-4 w-4" /> Expire Offer
-              </TransactionButton>
-            )}
-
-            {/* Withdraw expired job */}
-            {isClient && job.state === JobState.Cancelled && (
+            {/* Withdraw expired job — only for Open/Applications that exceeded T_ACCEPTANCE (14 days) */}
+            {/* BUG-005 fix: use blockchain time instead of Date.now() */}
+            {isClient &&
+              (job.state === JobState.Open || job.state === JobState.Applications) &&
+              (nowTimestamp > job.createdAt + T_ACCEPTANCE) && (
               <TransactionButton
                 onClick={async () => {
                   await withdrawExpiredJob(job.jobId);
@@ -489,6 +710,31 @@ export default function JobDetail() {
           </div>
         </div>
       )}
+      {/* Public actions — callable by anyone */}
+      {/* BUG-006 fix: use blockchain time instead of Date.now() */}
+      {address &&
+        job.state === JobState.Applications &&
+        job.freelancer !== "0x0000000000000000000000000000000000000000" &&
+        job.selectedAt > 0 &&
+        nowTimestamp > job.selectedAt + T_STAKE && (
+        <div className="card">
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">Public Actions</h2>
+          <p className="text-sm text-gray-500 mb-3">
+            The offer to the selected freelancer has expired. Anyone can clear the stale selection.
+          </p>
+          <TransactionButton
+            onClick={async () => {
+              await expireOffer(job.jobId);
+              refresh();
+            }}
+            isLoading={txLoading}
+            variant="secondary"
+          >
+            <AlertTriangle className="mr-1.5 h-4 w-4" /> Expire Offer
+          </TransactionButton>
+        </div>
+      )}
+
       {/* Agreement Modal */}
       {showAgreementModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

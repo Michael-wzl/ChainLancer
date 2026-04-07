@@ -61,7 +61,7 @@ describe("JobEscrow", function () {
           5 * ONE_DAY, // 5 days is NOT in allowed set
           "QmCID"
         )
-      ).to.be.revertedWith("Invalid review timeout");
+      ).to.be.revertedWithCustomError(jobEscrow, "InvalidTimeout");
     });
 
     it("should reject milestone below 10% minimum", async function () {
@@ -76,7 +76,7 @@ describe("JobEscrow", function () {
           SEVEN_DAYS,
           "QmCID"
         )
-      ).to.be.revertedWith("Milestone below minimum");
+      ).to.be.revertedWithCustomError(jobEscrow, "MsBelowMinimum");
     });
 
     it("should reject empty milestones array", async function () {
@@ -90,7 +90,7 @@ describe("JobEscrow", function () {
           SEVEN_DAYS,
           "QmCID"
         )
-      ).to.be.revertedWith("No milestones");
+      ).to.be.revertedWithCustomError(jobEscrow, "NoMilestones");
     });
 
     it("should emit JobPosted event", async function () {
@@ -120,7 +120,7 @@ describe("JobEscrow", function () {
 
       const proposalHash = ethers.keccak256(ethers.toUtf8Bytes("proposal"));
       await expect(
-        jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash)
+        jobEscrow.connect(freelancer1).applyForJob(jobId, proposalHash, "")
       ).to.emit(jobEscrow, "ApplicationSubmitted");
 
       const apps = await jobEscrow.getApplications(jobId);
@@ -132,7 +132,7 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.state).to.equal(1); // Applications
@@ -142,10 +142,10 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await expect(
-        jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash)
-      ).to.be.revertedWith("Already applied");
+        jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "")
+      ).to.be.revertedWithCustomError(jobEscrow, "AlreadyApplied");
     });
 
     it("should reject client from applying to own job", async function () {
@@ -153,8 +153,8 @@ describe("JobEscrow", function () {
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
       await expect(
-        jobEscrow.connect(client).applyForJob(jobId, ethers.ZeroHash)
-      ).to.be.revertedWith("Client cannot apply");
+        jobEscrow.connect(client).applyForJob(jobId, ethers.ZeroHash, "")
+      ).to.be.revertedWithCustomError(jobEscrow, "NotParty");
     });
   });
 
@@ -166,7 +166,7 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
 
       const encKey = ethers.toUtf8Bytes("enc-key");
       await expect(
@@ -181,22 +181,36 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
 
       await expect(
         jobEscrow.connect(client).selectFreelancer(jobId, freelancer2.address, ethers.toUtf8Bytes("key"))
-      ).to.be.revertedWith("Freelancer has not applied");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotApplicant");
     });
 
     it("should reject selection by non-client", async function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
 
       await expect(
         jobEscrow.connect(freelancer1).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"))
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
+    });
+
+    it("should reject selecting when a freelancer is already selected", async function () {
+      const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
+      const { jobId } = await createDefaultJob(jobEscrow, client);
+
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
+
+      // Attempting to select another freelancer should revert
+      await expect(
+        jobEscrow.connect(client).selectFreelancer(jobId, freelancer2.address, ethers.toUtf8Bytes("key2"))
+      ).to.be.revertedWithCustomError(jobEscrow, "AlreadySelected");
     });
   });
 
@@ -209,26 +223,26 @@ describe("JobEscrow", function () {
         await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       const balBefore = await usdcContract.balanceOf(freelancer1.address);
       await jobEscrow.connect(freelancer1).confirmAndStake(jobId);
       const balAfter = await usdcContract.balanceOf(freelancer1.address);
 
-      // 5% of 1000 = 50 USDC deposit
-      expect(balBefore - balAfter).to.equal(usdc(50));
+      // 7.5% of 1000 = 75 USDC deposit (New tier)
+      expect(balBefore - balAfter).to.equal(usdc(75));
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.state).to.equal(2); // Active
-      expect(info.freelancerDeposit).to.equal(usdc(50));
+      expect(info.freelancerDeposit).to.equal(usdc(75));
     });
 
     it("should reject if stake window expired (T_STAKE = 3 days)", async function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       // Advance past T_STAKE
@@ -236,19 +250,19 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).confirmAndStake(jobId)
-      ).to.be.revertedWith("Stake window expired");
+      ).to.be.revertedWithCustomError(jobEscrow, "StakeWindowExpired");
     });
 
     it("should reject wrong freelancer", async function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       await expect(
         jobEscrow.connect(freelancer2).confirmAndStake(jobId)
-      ).to.be.revertedWith("Not selected freelancer");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotSelected");
     });
   });
 
@@ -277,7 +291,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(client).submitMilestone(jobId, 0, ethers.ZeroHash, "QmCID")
-      ).to.be.revertedWith("Only freelancer");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyFreelancer");
     });
 
     it("should reject submission past deadline", async function () {
@@ -290,7 +304,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).submitMilestone(jobId, 0, ethers.ZeroHash, "QmCID")
-      ).to.be.revertedWith("Milestone deadline passed");
+      ).to.be.revertedWithCustomError(jobEscrow, "DeadlinePassed");
     });
   });
 
@@ -330,7 +344,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).approveMilestone(jobId, 0)
-      ).to.be.revertedWith("Only client");
+      ).to.be.revertedWithCustomError(jobEscrow, "OnlyClient");
     });
 
     it("should reject approval of non-InReview milestone", async function () {
@@ -340,7 +354,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(client).approveMilestone(jobId, 0)
-      ).to.be.revertedWith("Not in review");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
     });
   });
 
@@ -388,7 +402,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.triggerAutoApprove(jobId, 0)
-      ).to.be.revertedWith("Review timeout not expired");
+      ).to.be.revertedWithCustomError(jobEscrow, "TimeoutNotExpired");
     });
 
     it("should allow anyone to trigger auto-approve", async function () {
@@ -438,7 +452,7 @@ describe("JobEscrow", function () {
       // Milestone is Pending, not InReview
       await expect(
         jobEscrow.connect(client).raiseDispute(jobId, 0)
-      ).to.be.revertedWith("Not in review");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
     });
   });
 
@@ -459,13 +473,13 @@ describe("JobEscrow", function () {
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.state).to.equal(5); // Abandoned
 
-      // Client should get remaining escrow (1000) + bond refund (75), but deposit (50) goes to treasury
+      // Client should get remaining escrow (1000) + bond refund (75), but deposit (75) goes to treasury
       const clientBal = await jobEscrow.withdrawableBalances(client.address);
       expect(clientBal).to.equal(usdc(1075)); // 1000 escrow + 75 bond
 
-      // Treasury gets the forfeited deposit
+      // Treasury gets the forfeited deposit (7.5% of 1000 = 75 for New tier)
       const treasuryBal = await jobEscrow.withdrawableBalances(treasury.address);
-      expect(treasuryBal).to.equal(usdc(50)); // freelancer deposit
+      expect(treasuryBal).to.equal(usdc(75)); // freelancer deposit
     });
   });
 
@@ -487,17 +501,32 @@ describe("JobEscrow", function () {
       expect(clientBal).to.equal(usdc(1075));
     });
 
-    it("should cancel in Applications state with reputation penalty if freelancer selected", async function () {
+    it("should cancel in Applications state with reputation penalty if freelancer selected (after offer expires)", async function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
+
+      // Must wait for T_STAKE to expire before cancellation is allowed
+      await time.increase(THREE_DAYS + 1);
 
       await jobEscrow.connect(client).cancelJob(jobId);
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.state).to.equal(4); // Cancelled
+    });
+
+    it("should reject cancellation while freelancer has pending offer", async function () {
+      const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
+      const { jobId } = await createDefaultJob(jobEscrow, client);
+
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
+
+      await expect(
+        jobEscrow.connect(client).cancelJob(jobId)
+      ).to.be.revertedWithCustomError(jobEscrow, "CancelWhileOffer");
     });
 
     it("should reject cancellation in Active state", async function () {
@@ -507,7 +536,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(client).cancelJob(jobId)
-      ).to.be.revertedWith("Cannot cancel in current state");
+      ).to.be.revertedWithCustomError(jobEscrow, "InvalidState");
     });
   });
 
@@ -526,9 +555,9 @@ describe("JobEscrow", function () {
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.state).to.equal(4); // Cancelled
 
-      // Freelancer gets deposit back
+      // Freelancer gets deposit back (7.5% of 1000 = 75 for New tier)
       const fBal = await jobEscrow.withdrawableBalances(freelancer1.address);
-      expect(fBal).to.equal(usdc(50)); // 5% deposit refund
+      expect(fBal).to.equal(usdc(75)); // 7.5% deposit refund
 
       // Client gets remaining escrow + bond (7.5%)
       const cBal = await jobEscrow.withdrawableBalances(client.address);
@@ -550,9 +579,9 @@ describe("JobEscrow", function () {
       await jobEscrow.connect(freelancer1).requestCancellation(jobId);
       await jobEscrow.connect(client).acceptCancellation(jobId);
 
-      // Freelancer: 490 (milestone payout) + 50 (deposit refund)
+      // Freelancer: 490 (milestone payout) + 75 (deposit refund, 7.5% New tier)
       const fBal = await jobEscrow.withdrawableBalances(freelancer1.address);
-      expect(fBal).to.equal(usdc(540));
+      expect(fBal).to.equal(usdc(565));
 
       // Client: 500 (remaining 1 milestone escrow) + 75 (bond)
       const cBal = await jobEscrow.withdrawableBalances(client.address);
@@ -585,7 +614,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(client).withdrawExpiredJob(jobId)
-      ).to.be.revertedWith("Not expired yet");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotExpiredYet");
     });
   });
 
@@ -616,7 +645,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(client).withdraw()
-      ).to.be.revertedWith("Nothing to withdraw");
+      ).to.be.revertedWithCustomError(jobEscrow, "NothingToWithdraw");
     });
   });
 
@@ -628,16 +657,19 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
-      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       // Wait for T_STAKE to expire
       await time.increase(THREE_DAYS + 1);
 
-      await jobEscrow.connect(client).reselectFreelancer(
-        jobId, freelancer2.address, ethers.toUtf8Bytes("key2")
-      );
+      await expect(
+        jobEscrow.connect(client).reselectFreelancer(
+          jobId, freelancer2.address, ethers.toUtf8Bytes("key2")
+        )
+      ).to.emit(jobEscrow, "FreelancerDeselected").withArgs(jobId, freelancer1.address)
+       .and.to.emit(jobEscrow, "FreelancerSelected").withArgs(jobId, freelancer2.address, ethers.toUtf8Bytes("key2"));
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.freelancer).to.equal(freelancer2.address);
@@ -652,12 +684,13 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       await expect(
         jobEscrow.connect(freelancer1).rejectOffer(jobId)
-      ).to.emit(jobEscrow, "OfferRejected").withArgs(jobId, freelancer1.address);
+      ).to.emit(jobEscrow, "OfferRejected").withArgs(jobId, freelancer1.address)
+       .and.to.emit(jobEscrow, "FreelancerDeselected").withArgs(jobId, freelancer1.address);
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.freelancer).to.equal(ethers.ZeroAddress);
@@ -668,20 +701,20 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       await expect(
         jobEscrow.connect(freelancer2).rejectOffer(jobId)
-      ).to.be.revertedWith("Not selected freelancer");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotSelected");
     });
 
     it("should allow client to reselect after rejection", async function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
-      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       // Freelancer rejects
@@ -701,7 +734,7 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.connect(freelancer1).rejectOffer(jobId)
-      ).to.be.revertedWith("Not in applications");
+      ).to.be.revertedWithCustomError(jobEscrow, "InvalidState");
     });
   });
 
@@ -713,7 +746,7 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       // Wait for T_STAKE to expire
@@ -722,7 +755,8 @@ describe("JobEscrow", function () {
       // Anyone can trigger this
       await expect(
         jobEscrow.connect(freelancer2).expireOffer(jobId)
-      ).to.emit(jobEscrow, "OfferExpired").withArgs(jobId, freelancer1.address);
+      ).to.emit(jobEscrow, "OfferExpired").withArgs(jobId, freelancer1.address)
+       .and.to.emit(jobEscrow, "FreelancerDeselected").withArgs(jobId, freelancer1.address);
 
       const info = await jobEscrow.getJobInfo(jobId);
       expect(info.freelancer).to.equal(ethers.ZeroAddress);
@@ -733,23 +767,23 @@ describe("JobEscrow", function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
       await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
 
       await expect(
         jobEscrow.connect(freelancer1).expireOffer(jobId)
-      ).to.be.revertedWith("Offer not expired");
+      ).to.be.revertedWithCustomError(jobEscrow, "OfferNotExpired");
     });
 
     it("should revert when no freelancer is selected", async function () {
       const { jobEscrow, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
-      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash);
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
 
       await expect(
         jobEscrow.connect(freelancer1).expireOffer(jobId)
-      ).to.be.revertedWith("No pending offer");
+      ).to.be.revertedWithCustomError(jobEscrow, "NoOffer");
     });
   });
 
@@ -781,9 +815,9 @@ describe("JobEscrow", function () {
       await time.increase(31 * ONE_DAY);
       await jobEscrow.connect(client).claimAbandonment(jobId, 0);
 
-      // Treasury gets the forfeited deposit
+      // Treasury gets the forfeited deposit (7.5% for New tier)
       const treasuryBal = await jobEscrow.withdrawableBalances(treasury.address);
-      expect(treasuryBal).to.equal(usdc(50)); // 5% of 1000
+      expect(treasuryBal).to.equal(usdc(75)); // 7.5% of 1000
 
       // Client does NOT get the deposit
       const clientBal = await jobEscrow.withdrawableBalances(client.address);
@@ -795,7 +829,7 @@ describe("JobEscrow", function () {
   //       Dispute Timer Pause (Change 7)
   // ═══════════════════════════════════════════════════════════
   describe("Dispute Timer Pause", function () {
-    it("should record remainingReviewTime when dispute is raised", async function () {
+    it("should mark milestone as Disputed when dispute is raised", async function () {
       const { jobEscrow, usdc: usdcContract, client, freelancer1 } =
         await loadFixture(deployFullPlatformFixture);
       const { jobId } = await advanceJobToActive(jobEscrow, usdcContract, client, freelancer1);
@@ -814,12 +848,6 @@ describe("JobEscrow", function () {
       // Check milestone is disputed
       const msInfo = await jobEscrow.getMilestoneInfo(jobId, 0);
       expect(msInfo.status).to.equal(4); // Disputed
-
-      // Check remainingReviewTime is approximately 5 days (7 - 2)
-      const milestones = await jobEscrow.getMilestones(jobId);
-      const remaining = milestones[0].remainingReviewTime;
-      // Allow ±10 seconds of tolerance for block timestamps
-      expect(remaining).to.be.closeTo(BigInt(5 * ONE_DAY), 10n);
     });
 
     it("should reject auto-approve on disputed milestone", async function () {
@@ -840,7 +868,54 @@ describe("JobEscrow", function () {
 
       await expect(
         jobEscrow.triggerAutoApprove(jobId, 0)
-      ).to.be.revertedWith("Not in review");
+      ).to.be.revertedWithCustomError(jobEscrow, "NotInReview");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  //      G-13: postJob Edge Cases
+  // ═══════════════════════════════════════════════════════════
+  describe("postJob edge cases", function () {
+    it("should revert when agreementHash is bytes32(0)", async function () {
+      const { jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const now = (await ethers.provider.getBlock("latest"))!.timestamp;
+
+      await expect(
+        jobEscrow.connect(client).postJob(
+          ethers.ZeroHash,
+          [usdc(500), usdc(500)],
+          [now + 30 * ONE_DAY, now + 60 * ONE_DAY],
+          SEVEN_DAYS,
+          "QmCID"
+        )
+      ).to.be.revertedWithCustomError(jobEscrow, "EmptyAgreement");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  //      G-08/G-13: reselectFreelancer after rejectOffer
+  // ═══════════════════════════════════════════════════════════
+  describe("reselectFreelancer after rejectOffer", function () {
+    it("should allow reselectFreelancer immediately after rejection (no T_STAKE wait)", async function () {
+      const { jobEscrow, client, freelancer1, freelancer2 } = await loadFixture(deployFullPlatformFixture);
+      const { jobId } = await createDefaultJob(jobEscrow, client);
+
+      await jobEscrow.connect(freelancer1).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(freelancer2).applyForJob(jobId, ethers.ZeroHash, "");
+      await jobEscrow.connect(client).selectFreelancer(jobId, freelancer1.address, ethers.toUtf8Bytes("key"));
+
+      // Freelancer rejects
+      await jobEscrow.connect(freelancer1).rejectOffer(jobId);
+
+      // Client can immediately reselect (no T_STAKE wait needed)
+      await expect(
+        jobEscrow.connect(client).reselectFreelancer(
+          jobId, freelancer2.address, ethers.toUtf8Bytes("key2")
+        )
+      ).to.emit(jobEscrow, "FreelancerSelected");
+
+      const info = await jobEscrow.getJobInfo(jobId);
+      expect(info.freelancer).to.equal(freelancer2.address);
     });
   });
 });

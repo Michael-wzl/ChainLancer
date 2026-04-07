@@ -7,16 +7,20 @@ library ReputationLib {
     uint256 public constant PRECISION = 1e18;
 
     /// @notice Calculate freelancer reputation score
-    /// @dev score = totalValueCompleted / (1 + L * 0.3)
-    ///      In fixed-point: totalValueCompleted * PRECISION / (PRECISION + L * 3 * PRECISION / 10)
+    /// @dev score = totalValueCompleted / (1 + L * 0.3 + C * 0.1)
+    ///      In fixed-point: totalValueCompleted * PRECISION / (PRECISION + L * 3 * PRECISION / 10 + C * PRECISION / 10)
     /// @param totalValueCompleted Sum of V_i * m_i
-    /// @param disputesLost Number of disputes lost
+    /// @param disputesLost Number of disputes lost (L)
+    /// @param cancellations Number of voluntary cancellations (C)
     /// @return score Fixed-point score with 18 decimals
     function calculateFreelancerScore(
         uint256 totalValueCompleted,
-        uint256 disputesLost
+        uint256 disputesLost,
+        uint256 cancellations
     ) internal pure returns (uint256) {
-        uint256 denominator = PRECISION + (disputesLost * 3 * PRECISION / 10);
+        uint256 denominator = PRECISION
+            + (disputesLost * 3 * PRECISION / 10)
+            + (cancellations * PRECISION / 10);
         if (denominator == 0) return 0;
         return (totalValueCompleted * PRECISION) / denominator;
     }

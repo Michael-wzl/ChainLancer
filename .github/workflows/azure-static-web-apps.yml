@@ -29,3 +29,24 @@ jobs:
           app_location: "/frontend" 
           api_location: ""
           output_location: "dist" 
+        env:
+          VITE_TARGET_NETWORK: base-sepolia
+          VITE_PINATA_JWT: ${{ secrets.VITE_PINATA_JWT }}
+          VITE_PINATA_GATEWAY_URL: ${{ secrets.VITE_PINATA_GATEWAY_URL }}
+          VITE_MOCK_USDC_ADDRESS: ${{ secrets.VITE_MOCK_USDC_ADDRESS }}
+          VITE_JOB_ESCROW_ADDRESS: ${{ secrets.VITE_JOB_ESCROW_ADDRESS }}
+          VITE_DISPUTE_ADDRESS: ${{ secrets.VITE_DISPUTE_ADDRESS }}
+          VITE_REPUTATION_ADDRESS: ${{ secrets.VITE_REPUTATION_ADDRESS }}
+          VITE_DATA_AVAILABILITY_ADDRESS: ${{ secrets.VITE_DATA_AVAILABILITY_ADDRESS }}
+
+  close_pull_request_job:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request Job
+    steps:
+      - name: Close Pull Request
+        id: closepullrequest
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: "close"

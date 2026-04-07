@@ -50,7 +50,7 @@ describe("Reputation", function () {
       const scoreBefore = (await reputation.freelancerProfiles(freelancer1.address)).reputationScore;
 
       // Lose a dispute
-      await reputation.connect(escrowSigner).recordDisputeLoss(freelancer1.address);
+      await reputation.connect(escrowSigner).recordFreelancerDisputeLoss(freelancer1.address);
       const scoreAfter = (await reputation.freelancerProfiles(freelancer1.address)).reputationScore;
 
       expect(scoreAfter).to.be.lt(scoreBefore);
@@ -120,11 +120,160 @@ describe("Reputation", function () {
       // Post 3 jobs, complete all, high completion ratio
       for (let i = 0; i < 3; i++) {
         await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
-        await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(1000));
+        await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(1000), 3);
       }
 
       const tier = await reputation.getClientTier(client.address);
       expect(tier).to.equal(1); // Bronze
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  //          G-13: Tier Boundary Conditions
+  // ═══════════════════════════════════════════════════════════
+  describe("getClientTier boundary conditions", function () {
+    it("should return New when totalValueCompleted == 999e6", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 1 job, complete with 999 USDC → just below Bronze threshold
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(999), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(0); // New
+    });
+
+    it("should return Bronze when totalValueCompleted == 1000e6 and completion > 50%", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 2 jobs, complete both (100% completion > 50%), total = 1000
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(500), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(500), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(1); // Bronze
+    });
+
+    it("should return Bronze (not Silver) when totalValueCompleted == 9999e6", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // All completed, 9999 USDC — below Silver threshold
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(9999), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(1); // Bronze
+    });
+
+    it("should return Silver when totalValueCompleted == 10_000e6, completion > 75%, autoApprove < 20%", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 2 jobs, complete both (100% > 75%), total = 10000, no auto-approves
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(5000), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(5000), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(2); // Silver
+    });
+
+    it("should return Silver (not Gold) when totalValueCompleted == 49_999e6", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(49999), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(2); // Silver
+    });
+
+    it("should return Gold when totalValueCompleted == 50_000e6, completion > 90%, autoApprove < 10%", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 2 jobs, complete both (100% > 90%), total = 50000, no auto-approves
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
+
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(3); // Gold
+    });
+
+    it("should remain Silver if autoApproveRate >= 10% even with $50k+", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 2 jobs, complete both, total = 50000
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
+
+      // autoApproveRate = autoApproveCount * 100 / totalMilestoneCount
+      // With 2 completed jobs, milestoneCount=3 each → totalMilestones = 6
+      // Need autoApproveRate >= 10 → autoApproveCount * 100 / 6 >= 10 → autoApproveCount >= 1
+      await reputation.connect(escrowSigner).recordClientAutoApprove(client.address);
+
+      // autoApproveRate = 1 * 100 / 6 = 16 → >= 10, so NOT Gold
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(2); // Silver, not Gold
+    });
+
+    it("should remain Bronze if completion rate <= 75% even with $10k+", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Post 4 jobs, complete 3 → 75% completion, which is NOT > 75% (strict >)
+      for (let i = 0; i < 4; i++) {
+        await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      }
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(4000), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(3000), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(3000), 3);
+
+      // total = 10000, completion = 3/4 = 75% → NOT > 75%
+      const tier = await reputation.getClientTier(client.address);
+      expect(tier).to.equal(1); // Bronze, not Silver
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  //          G-13: Tier Progression Lifecycle
+  // ═══════════════════════════════════════════════════════════
+  describe("Tier progression lifecycle", function () {
+    it("should progress New → Bronze → Silver → Gold as thresholds are met", async function () {
+      const { reputation, jobEscrow, client } = await loadFixture(deployFullPlatformFixture);
+      const escrowSigner = await getEscrowSigner(await jobEscrow.getAddress());
+
+      // Start: New
+      expect(await reputation.getClientTier(client.address)).to.equal(0);
+
+      // Post 2 jobs, complete both with 500 each → total 1000, completion 100% → Bronze
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(500), 3);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(500), 3);
+      expect(await reputation.getClientTier(client.address)).to.equal(1); // Bronze
+
+      // Complete more to reach 10000 → Silver
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(9000), 3);
+      expect(await reputation.getClientTier(client.address)).to.equal(2); // Silver
+
+      // Complete more to reach 50000 → Gold
+      await reputation.connect(escrowSigner).recordClientJobPosted(client.address);
+      await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(40000), 3);
+      expect(await reputation.getClientTier(client.address)).to.equal(3); // Gold
     });
   });
 });

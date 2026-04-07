@@ -5,191 +5,176 @@ import {
   PauseCircle,
   PlayCircle,
   DollarSign,
-  ArrowDownCircle,
   Gavel,
   RefreshCw,
   AlertOctagon,
-  ChevronRight,
+  ShieldAlert,
+  Loader2,
+  BarChart3,
+  Users,
+  Settings,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { useWallet } from "../contexts/WalletContext";
 import { useContracts } from "../contexts/ContractContext";
+import { useAdmin } from "../hooks/useAdmin";
 import { TransactionButton } from "../components/common/TransactionButton";
-import { formatUSDC, truncateAddress } from "../utils/format";
-import { DisputePhase, DISPUTE_PHASE_LABELS } from "../config/constants";
+import { PlatformStats } from "../components/admin/PlatformStats";
+import { RoleManager } from "../components/admin/RoleManager";
+import { JudgeAssigner } from "../components/admin/JudgeAssigner";
+import { formatUSDC } from "../utils/format";
+import { ROLES } from "../config/constants";
 import { parseContractError } from "../utils/errors";
+import type { PendingDispute } from "../hooks/useAdmin";
 
-interface AdminDispute {
-  id: number;
-  jobId: number;
-  milestoneIdx: number;
-  client: string;
-  freelancer: string;
-  milestoneValue: bigint;
-  phase: DisputePhase;
-}
+// ─── Tab config ───
+type AdminTab = "stats" | "roles" | "disputes" | "controls";
+
+const TABS: { key: AdminTab; label: string; icon: React.ElementType }[] = [
+  { key: "stats", label: "Platform Stats", icon: BarChart3 },
+  { key: "roles", label: "Role Management", icon: Users },
+  { key: "disputes", label: "Judge Assignment", icon: Gavel },
+  { key: "controls", label: "Contract Controls", icon: Settings },
+];
 
 export default function Admin() {
   const { address, isConnected } = useWallet();
   const { contracts, readContracts, isReady } = useContracts();
+  const { fetchPendingDisputes } = useAdmin();
 
-  const [loading, setLoading] = useState(true);
+  // Role gate
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<AdminTab>("stats");
+
+  // Controls state
   const [isPaused, setIsPaused] = useState(false);
   const [treasuryAddr, setTreasuryAddr] = useState<string>("");
   const [treasuryBal, setTreasuryBal] = useState<bigint>(0n);
-  const [disputes, setDisputes] = useState<AdminDispute[]>([]);
+  const [controlsLoading, setControlsLoading] = useState(true);
 
-  // Forms state
-  const [judgeForms, setJudgeForms] = useState<Record<number, { judgeAddress: string, ephemeralKey: string }>>({});
-  const [assigningId, setAssigningId] = useState<number | null>(null);
+  // Disputes state
+  const [pendingDisputes, setPendingDisputes] = useState<PendingDispute[]>([]);
 
-  const fetchAdminData = useCallback(async () => {
-    if (!readContracts.jobEscrow || !readContracts.dispute) return;
+  // ─── Role check ───
+  useEffect(() => {
+    const checkAdmin = async () => {
+      if (!readContracts.dispute || !readContracts.jobEscrow || !address) {
+        setIsAdmin(null);
+        return;
+      }
 
-    setLoading(true);
+      try {
+        const DEFAULT_ADMIN = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        const [hasAdmin, hasDefault, hasJobAdmin, hasJobDefault] = await Promise.all([
+          readContracts.dispute.hasRole(ROLES.PLATFORM_ADMIN, address),
+          readContracts.dispute.hasRole(DEFAULT_ADMIN, address),
+          readContracts.jobEscrow.hasRole(ROLES.PLATFORM_ADMIN, address),
+          readContracts.jobEscrow.hasRole(DEFAULT_ADMIN, address),
+        ]);
+        setIsAdmin(hasAdmin || hasDefault || hasJobAdmin || hasJobDefault);
+      } catch (err) {
+        console.error("Admin role check failed:", err);
+        setIsAdmin(false);
+      }
+    };
+
+    if (isReady) checkAdmin();
+  }, [readContracts.dispute, readContracts.jobEscrow, address, isReady]);
+
+  // ─── Fetch controls data ───
+  const fetchControlsData = useCallback(async () => {
+    if (!readContracts.jobEscrow) return;
+
+    setControlsLoading(true);
     try {
-      // Fetch platform pause state
       const paused = await readContracts.jobEscrow.paused();
       setIsPaused(paused);
 
-      // Fetch treasury balance
       const treasury = await readContracts.jobEscrow.treasury();
       setTreasuryAddr(treasury);
       const bal = await readContracts.jobEscrow.withdrawableBalances(treasury);
       setTreasuryBal(bal as bigint);
-
-      // Fetch all disputes
-      const nextIdBig = await readContracts.dispute.nextDisputeId();
-      const nextId = Number(nextIdBig);
-
-      const loadedDisputes: AdminDispute[] = [];
-      for (let i = 0; i < nextId; i++) {
-        // getDisputeDetails returns:
-        // (jobId, milestoneIdx, initiator, client, freelancer, milestoneValue, judge, phase, ruling)
-        const details = await readContracts.dispute.getDisputeDetails(i);
-        const phase = Number(details[7]) as DisputePhase;
-
-        // We only care about active disputes needing an admin to act or oversee
-        if (phase === DisputePhase.AwaitingJudge) {
-          loadedDisputes.push({
-            id: i,
-            jobId: Number(details[0]),
-            milestoneIdx: Number(details[1]),
-            client: details[3],
-            freelancer: details[4],
-            milestoneValue: details[5] as bigint,
-            phase: phase,
-          });
-        }
-      }
-
-      setDisputes(loadedDisputes);
     } catch (err) {
-      console.error("Failed to fetch admin data:", err);
-      toast.error("Could not fetch admin data");
+      console.error("Failed to fetch controls data:", err);
     } finally {
-      setLoading(false);
+      setControlsLoading(false);
     }
-  }, [readContracts.jobEscrow, readContracts.dispute]);
+  }, [readContracts.jobEscrow]);
 
+  // ─── Fetch pending disputes ───
+  const loadPendingDisputes = useCallback(async () => {
+    const pd = await fetchPendingDisputes();
+    setPendingDisputes(pd);
+  }, [fetchPendingDisputes]);
+
+  // Load data on mount
   useEffect(() => {
-    if (isReady) {
-      fetchAdminData();
+    if (isReady && isAdmin) {
+      fetchControlsData();
+      loadPendingDisputes();
     }
-  }, [isReady, fetchAdminData]);
+  }, [isReady, isAdmin, fetchControlsData, loadPendingDisputes]);
 
   const handlePauseToggle = async () => {
     if (!contracts.jobEscrow) return;
     toast.loading(isPaused ? "Unpausing..." : "Pausing...", { id: "pause" });
     try {
-      let tx;
-      if (isPaused) {
-        tx = await contracts.jobEscrow.unpause();
-      } else {
-        tx = await contracts.jobEscrow.pause();
-      }
+      const tx = isPaused
+        ? await contracts.jobEscrow.unpause()
+        : await contracts.jobEscrow.pause();
       await tx.wait();
-      toast.success(isPaused ? "Contract Unpaused" : "Contract Paused", { id: "pause" });
-      fetchAdminData();
+      toast.success(isPaused ? "Contract Unpaused" : "Contract Paused", {
+        id: "pause",
+      });
+      fetchControlsData();
     } catch (err) {
       toast.error(parseContractError(err), { id: "pause" });
     }
   };
 
-  const handleAssignJudge = async (disputeId: number) => {
-    if (!contracts.dispute) return;
-
-    const form = judgeForms[disputeId];
-    if (!form || !form.judgeAddress || !form.ephemeralKey) {
-      toast.error("Please fill in both fields");
-      return;
-    }
-
-    // Validate inputs
-    if (!ethers.isAddress(form.judgeAddress)) {
-      toast.error("Invalid Judge Address");
-      return;
-    }
-
-    let formattedKey = form.ephemeralKey;
-    if (!formattedKey.startsWith("0x")) {
-      formattedKey = "0x" + formattedKey;
-    }
-
-    setAssigningId(disputeId);
-    toast.loading(`Assigning Judge to #${disputeId}...`, { id: "assign" });
-    try {
-      const tx = await contracts.dispute.assignJudge(disputeId, form.judgeAddress, formattedKey);
-      await tx.wait();
-      toast.success("Judge Assigned Successfully!", { id: "assign" });
-
-      // Remove from form and refetch
-      setJudgeForms(prev => {
-        const next = { ...prev };
-        delete next[disputeId];
-        return next;
-      });
-      fetchAdminData();
-    } catch (err) {
-      toast.error(parseContractError(err), { id: "assign" });
-    } finally {
-      setAssigningId(null);
-    }
-  };
-
-  const updateJudgeForm = (disputeId: number, field: 'judgeAddress' | 'ephemeralKey', value: string) => {
-    setJudgeForms(prev => ({
-      ...prev,
-      [disputeId]: {
-        ...(prev[disputeId] || { judgeAddress: "", ephemeralKey: "" }),
-        [field]: value
-      }
-    }));
-  };
-
+  // ─── Access states ───
   if (!isConnected) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <Shield className="h-16 w-16 text-gray-300 mb-4" />
-        <h2 className="text-xl font-semibold text-gray-600">
-          Connect your wallet to view Admin panel
-        </h2>
+      <div className="max-w-5xl mx-auto p-6">
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <Shield className="h-16 w-16 text-gray-300 mb-4" />
+          <h2 className="text-xl font-semibold text-gray-600">
+            Connect your wallet to view Admin panel
+          </h2>
+        </div>
       </div>
     );
   }
 
-  if (loading) {
+  if (isAdmin === null) {
     return (
-      <div className="text-center py-20 text-gray-400">
-        <RefreshCw className="h-8 w-8 text-brand-500 animate-spin mx-auto mb-4" />
-        Loading Admin Dashboard...
+      <div className="max-w-5xl mx-auto p-6 text-center py-20">
+        <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-gray-400" />
+        <p className="text-gray-400">Checking admin access...</p>
       </div>
     );
   }
 
+  if (!isAdmin) {
+    return (
+      <div className="max-w-5xl mx-auto p-6">
+        <div className="card text-center py-12">
+          <ShieldAlert className="h-10 w-10 mx-auto mb-3 text-red-400" />
+          <p className="text-lg font-semibold text-gray-900">Access Denied</p>
+          <p className="text-sm text-gray-500 mt-1">
+            You are not a platform administrator.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Main Dashboard ───
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-3xl font-extrabold text-gray-900 flex items-center gap-3">
@@ -197,157 +182,130 @@ export default function Admin() {
           Admin Dashboard
         </h1>
         <p className="text-sm text-gray-500 mt-2">
-          Manage system controls, treasury, and assign judges to pending disputes.
+          Manage platform roles, stats, judges, and system controls.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Treasury Control */}
-        <div className="card border-t-4 border-t-green-500 shadow-md">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-green-500" />
-              Treasury Overview
-            </h2>
-            <button
-              onClick={fetchAdminData}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="bg-green-50/50 rounded-lg p-4 mb-4">
-            <p className="text-xs text-green-800 font-semibold mb-1 uppercase tracking-wider">Withdrawable Balance</p>
-            <p className="text-3xl font-extrabold text-green-600">
-              {formatUSDC(treasuryBal)}
-            </p>
-          </div>
-
-          <div className="text-xs text-gray-500 font-mono space-y-1">
-            <p>Treasury Address:</p>
-            <p className="break-all bg-gray-100 p-1.5 rounded">{treasuryAddr || "Loading..."}</p>
-          </div>
-        </div>
-
-        {/* Global Controls */}
-        <div className={`card border-t-4 shadow-md ${isPaused ? "border-t-red-500" : "border-t-brand-500"}`}>
-          <div className="flex items-center gap-2 mb-4">
-            <AlertOctagon className={`h-5 w-5 ${isPaused ? "text-red-500" : "text-brand-500"}`} />
-            <h2 className="text-lg font-bold text-gray-800">Global System Controls</h2>
-          </div>
-
-          <div className="mb-4">
-            <span className="text-sm text-gray-600 font-medium mr-2">Status:</span>
-            {isPaused ? (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                <PauseCircle className="h-3.5 w-3.5 mr-1" /> PAUSED
-              </span>
-            ) : (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                <PlayCircle className="h-3.5 w-3.5 mr-1" /> ACTIVE
-              </span>
-            )}
-          </div>
-
-          <p className="text-xs text-gray-500 mb-6">
-            Pausing the contract prevents new jobs, applications, and transfers from occurring to protect the system. Only a Platform Admin can toggle this.
-          </p>
-
-          <TransactionButton
-            onClick={handlePauseToggle}
-            variant={isPaused ? "success" : "danger"}
-            className="w-full justify-center"
+      {/* Tab Bar */}
+      <div className="flex border-b border-gray-200 gap-1 overflow-x-auto">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+              activeTab === tab.key
+                ? "border-brand-600 text-brand-700"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
           >
-            {isPaused ? (
-              <><PlayCircle className="mr-2 h-4 w-4" /> Unpause System</>
-            ) : (
-              <><PauseCircle className="mr-2 h-4 w-4" /> Pause System</>
-            )}
-          </TransactionButton>
-        </div>
+            <tab.icon className="h-4 w-4" />
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      {/* Disputes Awaiting Judge */}
-      <div className="card shadow-md">
-        <div className="flex items-center gap-2 mb-6">
-          <Gavel className="h-6 w-6 text-indigo-600" />
-          <h2 className="text-xl font-bold text-gray-900">Disputes Awaiting Judge</h2>
-          <span className="ml-2 bg-indigo-100 text-indigo-800 py-0.5 px-2.5 rounded-full text-xs font-semibold">
-            {disputes.length}
-          </span>
+      {/* Tab Content */}
+      {activeTab === "stats" && <PlatformStats />}
+
+      {activeTab === "roles" && <RoleManager />}
+
+      {activeTab === "disputes" && (
+        <JudgeAssigner
+          pendingDisputes={pendingDisputes}
+          onAssigned={() => loadPendingDisputes()}
+        />
+      )}
+
+      {activeTab === "controls" && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Treasury Control */}
+          <div className="card border-t-4 border-t-green-500 shadow-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-green-500" />
+                Treasury Overview
+              </h2>
+              <button
+                onClick={fetchControlsData}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <RefreshCw className={`h-4 w-4 ${controlsLoading ? "animate-spin" : ""}`} />
+              </button>
+            </div>
+
+            <div className="bg-green-50/50 rounded-lg p-4 mb-4">
+              <p className="text-xs text-green-800 font-semibold mb-1 uppercase tracking-wider">
+                Withdrawable Balance
+              </p>
+              <p className="text-3xl font-extrabold text-green-600">
+                {formatUSDC(treasuryBal)}
+              </p>
+            </div>
+
+            <div className="text-xs text-gray-500 font-mono space-y-1">
+              <p>Treasury Address:</p>
+              <p className="break-all bg-gray-100 p-1.5 rounded">
+                {treasuryAddr || "Loading..."}
+              </p>
+            </div>
+          </div>
+
+          {/* Global Controls */}
+          <div
+            className={`card border-t-4 shadow-md ${
+              isPaused ? "border-t-red-500" : "border-t-brand-500"
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <AlertOctagon
+                className={`h-5 w-5 ${
+                  isPaused ? "text-red-500" : "text-brand-500"
+                }`}
+              />
+              <h2 className="text-lg font-bold text-gray-800">
+                Global System Controls
+              </h2>
+            </div>
+
+            <div className="mb-4">
+              <span className="text-sm text-gray-600 font-medium mr-2">
+                Status:
+              </span>
+              {isPaused ? (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                  <PauseCircle className="h-3.5 w-3.5 mr-1" /> PAUSED
+                </span>
+              ) : (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                  <PlayCircle className="h-3.5 w-3.5 mr-1" /> ACTIVE
+                </span>
+              )}
+            </div>
+
+            <p className="text-xs text-gray-500 mb-6">
+              Pausing the contract prevents new jobs, applications, and
+              transfers from occurring to protect the system. Only a Platform
+              Admin can toggle this.
+            </p>
+
+            <TransactionButton
+              onClick={handlePauseToggle}
+              variant={isPaused ? "success" : "danger"}
+              className="w-full justify-center"
+            >
+              {isPaused ? (
+                <>
+                  <PlayCircle className="mr-2 h-4 w-4" /> Unpause System
+                </>
+              ) : (
+                <>
+                  <PauseCircle className="mr-2 h-4 w-4" /> Pause System
+                </>
+              )}
+            </TransactionButton>
+          </div>
         </div>
-
-        {disputes.length === 0 ? (
-          <div className="text-center py-10 bg-gray-50 rounded-lg border border-gray-100 border-dashed">
-            <Gavel className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-sm font-medium text-gray-500">No disputes currently awaiting a judge.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {disputes.map((d) => (
-              <div key={d.id} className="border border-gray-200 rounded-xl overflow-hidden transition hover:shadow-sm">
-                <div className="bg-gray-50 p-4 border-b border-gray-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                      Dispute #{d.id} <ChevronRight className="h-4 w-4 text-gray-400" /> Job #{d.jobId} (Milestone {d.milestoneIdx + 1})
-                    </h3>
-                    <div className="mt-1.5 flex items-center gap-4 text-xs text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                        C: <span className="font-mono">{truncateAddress(d.client)}</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-                        F: <span className="font-mono">{truncateAddress(d.freelancer)}</span>
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-xs font-medium text-gray-500 uppercase">Milestone Value</span>
-                    <span className="font-bold text-gray-900">{formatUSDC(d.milestoneValue)}</span>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-white">
-                  <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-4 items-end">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Judge Address</label>
-                      <input
-                        type="text"
-                        placeholder="0x..."
-                        className="input text-sm font-mono placeholder-gray-300"
-                        value={judgeForms[d.id]?.judgeAddress || ""}
-                        onChange={(e) => updateJudgeForm(d.id, "judgeAddress", e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Ephemeral Public Key (Hex)</label>
-                      <input
-                        type="text"
-                        placeholder="0x..."
-                        className="input text-sm font-mono placeholder-gray-300"
-                        value={judgeForms[d.id]?.ephemeralKey || ""}
-                        onChange={(e) => updateJudgeForm(d.id, "ephemeralKey", e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <TransactionButton
-                        onClick={() => handleAssignJudge(d.id)}
-                        isLoading={assigningId === d.id}
-                        variant="primary"
-                        className="w-full whitespace-nowrap"
-                      >
-                        Assign Judge
-                      </TransactionButton>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

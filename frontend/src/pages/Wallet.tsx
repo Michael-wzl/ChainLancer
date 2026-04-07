@@ -48,10 +48,10 @@ export default function Wallet() {
     refreshBalances();
   }, [refreshBalances]);
 
-  // Load stored keys
+  // Load stored keys — scoped to the connected address
   useEffect(() => {
-    setStoredKeys(getAllJobKeys());
-  }, []);
+    setStoredKeys(getAllJobKeys(address ?? undefined));
+  }, [address]);
 
   const handleWithdraw = async () => {
     await withdraw();
@@ -59,8 +59,8 @@ export default function Wallet() {
   };
 
   const handleRemoveKey = (jobId: string) => {
-    removeJobKey(Number(jobId));
-    setStoredKeys(getAllJobKeys());
+    removeJobKey(Number(jobId), address ?? undefined);
+    setStoredKeys(getAllJobKeys(address ?? undefined));
   };
 
   if (!isConnected || !address) {

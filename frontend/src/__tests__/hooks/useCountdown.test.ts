@@ -12,8 +12,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useCountdown } from "../../hooks/useCountdown";
 
+// Mock useBlockTimestamp so we can control "now" precisely
+let mockTimestamp = Math.floor(Date.now() / 1000);
+
+vi.mock("../../hooks/useBlockTimestamp", () => ({
+  IS_TEST_MODE: false,
+  useBlockTimestamp: () => mockTimestamp,
+}));
+
 describe("hooks/useCountdown", () => {
   beforeEach(() => {
+    mockTimestamp = Math.floor(Date.now() / 1000);
     vi.useFakeTimers();
   });
 
@@ -78,16 +87,17 @@ describe("hooks/useCountdown", () => {
   });
 
   it("should tick down over time", () => {
-    const now = Math.floor(Date.now() / 1000);
+    const now = mockTimestamp;
     const target = now + 60; // 60 seconds
 
-    const { result } = renderHook(() => useCountdown(target));
+    const { result, rerender } = renderHook(() => useCountdown(target));
     const initialSeconds = result.current.secondsLeft;
 
-    // Advance time by 5 seconds
+    // Simulate time advancing by 5 seconds
     act(() => {
-      vi.advanceTimersByTime(5000);
+      mockTimestamp = now + 5;
     });
+    rerender();
 
     expect(result.current.secondsLeft).toBeLessThan(initialSeconds);
   });

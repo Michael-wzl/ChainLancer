@@ -82,7 +82,7 @@ describe("ipfs/gateway", () => {
     it("should throw on binary fetch failure", async () => {
       vi.mocked(global.fetch).mockResolvedValue({
         ok: false,
-        status: 500,
+        status: 404,
       } as Response);
 
       await expect(retrieveBinaryFromIPFS("QmBadBin")).rejects.toThrow(

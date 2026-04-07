@@ -1,15 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useBlockTimestamp } from "./useBlockTimestamp";
 
 /**
  * Countdown timer hook. Returns seconds remaining.
+ *
+ * Uses blockchain time (via useBlockTimestamp) when VITE_TEST_MODE is enabled,
+ * otherwise uses Date.now(). This fixes BUG-005 where time-dependent UI
+ * elements would not reflect evm_increaseTime advances.
  */
 export function useCountdown(targetTimestamp: number | null): {
   secondsLeft: number;
   isExpired: boolean;
   formatted: string;
 } {
+  const nowTimestamp = useBlockTimestamp();
   const [secondsLeft, setSecondsLeft] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
     if (!targetTimestamp) {
@@ -17,19 +22,9 @@ export function useCountdown(targetTimestamp: number | null): {
       return;
     }
 
-    const tick = () => {
-      const now = Math.floor(Date.now() / 1000);
-      const remaining = targetTimestamp - now;
-      setSecondsLeft(Math.max(0, remaining));
-    };
-
-    tick();
-    intervalRef.current = setInterval(tick, 1000);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [targetTimestamp]);
+    const remaining = targetTimestamp - nowTimestamp;
+    setSecondsLeft(Math.max(0, remaining));
+  }, [targetTimestamp, nowTimestamp]);
 
   const isExpired = secondsLeft <= 0 && targetTimestamp !== null && targetTimestamp > 0;
 

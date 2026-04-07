@@ -18,9 +18,13 @@ interface IReputation {
         bool freelancerWon
     ) external;
 
-    /// @notice Record a dispute loss for either party
-    /// @param user The address of the party that lost
-    function recordDisputeLoss(address user) external;
+    /// @notice Record a dispute loss for a freelancer
+    /// @param freelancer The freelancer's address
+    function recordFreelancerDisputeLoss(address freelancer) external;
+
+    /// @notice Record a dispute loss for a client
+    /// @param client The client's address
+    function recordClientDisputeLoss(address client) external;
 
     /// @notice Record a new job posted by a client
     /// @param client The client's address
@@ -37,16 +41,26 @@ interface IReputation {
     /// @notice Record a job completion for a client
     /// @param client The client's address
     /// @param totalValue Total job value
-    function recordJobCompleted(address client, uint256 totalValue) external;
+    /// @param milestoneCount Number of milestones in the completed job
+    function recordJobCompleted(address client, uint256 totalValue, uint256 milestoneCount) external;
 
     /// @notice Record a job completion for a freelancer
     /// @param freelancer The freelancer's address
     function recordFreelancerJobCompleted(address freelancer) external;
 
+    /// @notice Record a cancellation penalty for a freelancer
+    /// @param freelancer The freelancer's address
+    function recordFreelancerCancellation(address freelancer) external;
+
     /// @notice Get the trust tier for a client (determines behavior bond requirement)
     /// @param client The client's address
     /// @return tier The client's tier
     function getClientTier(address client) external view returns (Tier);
+
+    /// @notice Get the trust tier for a freelancer
+    /// @param freelancer The freelancer's address
+    /// @return tier The freelancer's tier
+    function getFreelancerTier(address freelancer) external view returns (Tier);
 
     /// @notice Get the freelancer's reputation score
     /// @param user The freelancer's address
