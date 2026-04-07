@@ -15,6 +15,7 @@ import Profile from "./pages/Profile";
 import Wallet from "./pages/Wallet";
 import Admin from "./pages/Admin";
 import Judge from "./pages/JudgeDispute";
+import UserGuide from "./pages/UserGuide";
 import { IS_TEST_MODE } from "./hooks/useBlockTimestamp";
 
 const TimeTravelPanel = React.lazy(
@@ -69,6 +70,7 @@ export default function App({ appName }: { appName: string }) {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/profile/:address" element={<Profile />} />
                 <Route path="/wallet" element={<Wallet />} />
+                <Route path="/guide" element={<UserGuide />} />
                 <Route path="*" element={<NotFound />} />
               </Route>
             </Routes>

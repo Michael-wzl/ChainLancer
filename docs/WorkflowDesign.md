@@ -21,7 +21,7 @@
 
 With the decentralized arbitration removed, the contract structure simplifies:
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────────────┐
 │                          Frontend (dApp)                              │
 │                    React + ethers.js + IPFS                           │
@@ -58,7 +58,7 @@ With the decentralized arbitration removed, the contract structure simplifies:
 ```
 
 | Contract | Responsibility |
-|----------|---------------|
+| -------- | ------------- |
 | **JobEscrow.sol** | Job creation, milestone management, escrow locking/release, configurable timeouts, cancellation. **Serves as the single authoritative source of fund and milestone state.** Deployed behind a **UUPS proxy** (`UUPSUpgradeable`) for upgradeability, with upgrade authorization restricted to `DEFAULT_ADMIN_ROLE`. All state-mutating functions enforce a **state mutex** (per-milestone status check-before-update) to prevent race conditions between competing calls (e.g., `approveMilestone()` vs. `triggerAutoApprove()` vs. `raiseDispute()` in the same block). All terminal operations are **idempotent** — repeated calls after the first successful execution are no-ops (guarded by a `fundsProcessed` flag per milestone). Inherits OpenZeppelin `PausableUpgradeable` for emergency circuit-breaker functionality — the admin can pause all state-mutating user-facing functions. Uses `AccessControlDefaultAdminRulesUpgradeable` for time-delayed admin transfers (configurable delay set at initialization) and OpenZeppelin `ReentrancyGuard` on all fund-transferring functions. Funds are released via a **pull-over-push** (withdrawable balance) pattern: milestone payouts, deposit refunds, and bond refunds are credited to `withdrawableBalances[address]`, and recipients call `withdraw()` to claim. Applications are capped at **100 per job** (`MAX_APPLICATIONS_PER_JOB`) to prevent DoS from unbounded array growth, with O(1) duplicate application tracking via a mapping. |
 | **Dispute.sol** | Dispute creation, evidence submission, recording the platform judge's ruling. **Does not hold or directly transfer funds.** Deployed behind a **UUPS proxy** (`UUPSUpgradeable`) for upgradeability. Uses `AccessControlDefaultAdminRulesUpgradeable` for role management and `ReentrancyGuard` on ruling execution. When a ruling is executed, `Dispute.sol` calls a restricted interface on `JobEscrow.sol` (`executeDisputeRuling(jobId, milestoneIdx, ruling, freelancerShareBps, depositSlashBps)`) to redistribute funds. This ensures `JobEscrow.sol` remains the single point of fund custody and state authority, preventing cross-contract inconsistencies. The `JobEscrow` address is wired post-deploy via `setJobEscrow()` (admin-only, re-callable to allow re-wiring if JobEscrow is redeployed — security is maintained via the time-delayed admin transfer rules). Evidence submissions are capped at **20 per party per dispute** (`MAX_EVIDENCE_PER_PARTY`) to bound gas costs. Upon ruling execution, the judge's `PLATFORM_JUDGE` role is **automatically revoked** (least-privilege principle). |
 | **Reputation.sol** | Soulbound (non-transferable) on-chain reputation scores for both clients and freelancers. Deployed behind a **UUPS proxy** (`UUPSUpgradeable`) for upgradeability. Uses `AccessControlDefaultAdminRulesUpgradeable` for role management. Reputation updates are triggered by `JobEscrow.sol` upon milestone completion or dispute conclusion via direct restricted function calls (gated by `ESCROW_ROLE`), ensuring reputation cannot be updated without a corresponding fund state change. Tracks separate counters for disputes lost and voluntary cancellations. Scoring formulas are implemented in `ReputationLib.sol`. |
@@ -74,7 +74,7 @@ With the decentralized arbitration removed, the contract structure simplifies:
 
 ### 2.1 Workflow Diagram
 
-```
+```text
   Client                        JobEscrow                      Freelancer
     │                               │                               │
     │── 1. postJob() ──────────────>│                               │
@@ -149,7 +149,7 @@ With the decentralized arbitration removed, the contract structure simplifies:
 ### 2.2 Step-by-Step Description
 
 | Step | Actor | Action | Details |
-|------|-------|--------|---------|
+| ---- | ----- | ------ | ------- |
 | **1** | Client | `postJob()` | Locks 100% of job value (USDC) in escrow. **Chooses the review timeout** $T_{\text{review}}$ from the allowed set: **{1 day, 3 days, 7 days, 14 days, 21 days, 30 days}** (validated by `TimeoutLib.isValidReviewTimeout()`). This timeout is stored on-chain and **cannot be changed** after posting. Each milestone must represent at least **10% of the total job value** (`MIN_MILESTONE_BPS = 1000`) — this prevents milestone manipulation (see §6.1) and effectively limits jobs to at most 10 milestones. The contract enforces a hard array limit of **20 milestones** as a gas safety bound, though the 10% minimum is the binding constraint. Each milestone has an **absolute deadline timestamp** (`milestoneDeadlines[i]`) that must be in the future at posting time. Generates per-job symmetric key $K_{job}$ and a **cryptographically random 256-bit salt**. Encrypts the agreement (including the salt) with $K_{job}$, uploads ciphertext to IPFS, registers the IPFS CID on-chain via `DataAvailability.sol` (emitting a `CIDRegistered` event that triggers the platform pinning node to auto-pin the content), and stores `agreementHash = keccak256(salt ‖ plaintext)` on-chain. The salt is embedded inside the encrypted IPFS payload — it is never published in the clear. This prevents **confirmation attacks** where an adversary who suspects the agreement content (e.g., from a standard template) could brute-force the hash to verify their guess. Clients also lock a **graduated behavior bond** based on their reputation tier: 7.5% (New), 5% (Bronze), 2.5% (Silver), or 1% (Gold). The total transfer is `totalValue + behaviorBond`. The client's `recordClientJobPosted()` is called on `Reputation.sol` to track jobs posted. |
 | **2** | Freelancer(s) | `applyForJob()` | One or more freelancers browse open jobs. **The chosen $T_{\text{review}}$ is publicly visible on-chain**, so freelancers know exactly how long the client has to review before auto-approval kicks in. They can factor this into their decision to apply. Each application includes an optional IPFS proposal hash (registered on-chain via `DataAvailability.sol` as `ContentType.Proposal`) and their on-chain reputation is readable from `Reputation.sol`. No deposit or commitment is required to apply. The job transitions from `Open` to `Applications` on the first application. Duplicate applications from the same address are rejected via **O(1) mapping lookup** (not an array scan). The client cannot apply to their own job. Applications are capped at **100 per job** (`MAX_APPLICATIONS_PER_JOB`) to prevent DoS from unbounded array growth. |
 | **3** | Client | `selectFreelancer()` | Client reviews applications (reputation scores, proposal content) and selects one freelancer. The contract verifies (via O(1) mapping lookup) that the freelancer has applied for this job. The freelancer should have previously registered a secp256k1 encryption public key on-chain via `registerEncryptionKey()` (33-byte compressed key), though this is enforced at the **application layer** (frontend) rather than on-chain — the contract does not require the encryption key to exist at selection time. The client publishes $\text{Enc}(pk_{\text{freelancer}}, K_{job})$ on-chain so the freelancer can decrypt all job content. Starts the $T_{\text{stake}}$ timer (3 days). The freelancer may **accept** (Step 4a), **explicitly reject** (Step 4b), or **let the offer expire** (auto-reject on $T_{\text{stake}}$ expiry). In all rejection cases, the client can immediately select another applicant via `reselectFreelancer()`. If a previous selection has not been cleared (freelancer is still set), the client must use `reselectFreelancer()` instead. |
@@ -167,7 +167,7 @@ With the decentralized arbitration removed, the contract structure simplifies:
 The client selects the review timeout when posting the job. This provides flexibility while preventing abuse:
 
 | Allowed $T_{\text{review}}$ | Typical Use Case |
-|------------------------------|-----------------|
+| ---------------------------- | --------------- |
 | **1 day** | Small, well-defined tasks (e.g., logo design, bug fix) |
 | **3 days** | Standard short tasks |
 | **7 days** | Default for most projects |
@@ -184,7 +184,7 @@ The client selects the review timeout when posting the job. This provides flexib
 ### 2.4 Other Timeouts
 
 | Timeout | Duration | Effect |
-|---------|----------|--------|
+| ------- | -------- | ------ |
 | **$T_{\text{acceptance}}$** | 14 days | If no freelancer applies or client doesn't select, client can withdraw escrowed funds |
 | **$T_{\text{stake}}$** | 3 days | Selected freelancer must call `confirmAndStake()` or `rejectOffer()` within 3 days. If the freelancer explicitly rejects, the client can immediately select another applicant. If the freelancer does not respond, the offer is auto-rejected on expiry and the client can pick another. |
 | **$T_{\text{deadline}}$** | Per-milestone (absolute timestamp, set by client at `postJob()`) | Enforced at two points: (1) `submitMilestone()` reverts if `block.timestamp > ms.deadline` — freelancer cannot submit past deadline. (2) If freelancer misses deadline and no milestones are currently `IN_REVIEW` or `DISPUTED`, client can call `claimAbandonment()` → deposit forfeited to platform treasury, remaining escrow returned to client. The guard prevents using abandonment to bypass active reviews or disputes. |
@@ -209,7 +209,7 @@ Because multiple actors can call competing functions on the same milestone withi
 Cancellation behavior depends on the current job state. The rules are designed to be fair to both parties based on how much commitment has been made at each stage:
 
 | Job State | Who Can Cancel | Action | Fund Disposition | Reputation & Deposit Effects |
-|-----------|---------------|--------|-----------------|-----------------------------|
+| --------- | -------------- | ------ | ---------------- | ---------------------------- |
 | **OPEN** (no applicants yet) | Client | `cancelJob()` | 100% of escrowed funds returned to client. Behavior bond refunded in full. | No reputation impact. No freelancer is involved. |
 | **APPLICATIONS** (freelancers have applied, none selected) | Client | `cancelJob()` | 100% of escrowed funds returned to client. Behavior bond refunded in full. | No reputation impact — freelancers have not committed any deposit or performed any work. |
 | **APPLICATIONS** (freelancer selected, awaiting `confirmAndStake()`) | Client | `cancelJob()` | Client **cannot cancel while the freelancer has a live pending offer** (`block.timestamp <= selectedAt + T_STAKE`). The client must wait for the $T_{\text{stake}}$ window to expire before cancelling. Once the offer has expired: 100% of escrowed funds returned to client. Behavior bond refunded in full. | Client incurs a minor cancellation penalty ($C \times 0.1$ in the reputation formula). The selected freelancer's reputation is unaffected. |
@@ -239,7 +239,7 @@ When a client rejects a milestone or either party believes the other is acting i
 
 ### 3.2 Workflow Diagram
 
-```
+```text
   Either Party           JobEscrow            Dispute.sol           Platform Judge
     │                        │                     │                      │
     │── raiseDispute() ─────>│                     │                      │
@@ -282,7 +282,7 @@ When a client rejects a milestone or either party believes the other is acting i
 ### 3.3 Step-by-Step Description
 
 | Step | Actor | Action | Details |
-|------|-------|--------|---------|
+| ---- | ----- | ------ | ------- |
 | **1** | Client or Freelancer | `raiseDispute()` | The disputing party pays a **dispute fee** calculated as $F_{\text{dispute}} = \max(50\text{ USDC},\; 10\% \times V_{\text{milestone}})$. By denominating the fee in the same stablecoin (USDC) used for all payments, the fee's real value is deterministic and immune to crypto-asset volatility — neither party faces unpredictable costs due to ETH price swings. The 10% rate makes the fee proportional to the value at stake, while the $50 minimum ensures that even small disputes carry a meaningful cost to deter frivolous filings. The disputed milestone's funds are **frozen in escrow** and the **automated release timer ($T_{\text{review}}$) is paused**. No auto-approve can be triggered while the dispute is active. The timer remains paused until the platform signals a manual resolution via `executeRuling()`. The milestone state changes to **Disputed**. Calls `Dispute.createDispute()`. |
 | **2** | Both parties | `submitEvidence()` | Both parties have a **5-day evidence window** ($T_{\text{evidence}}$) to submit evidence. Evidence is encrypted with $K_{job}$ and uploaded to IPFS; the CID is registered on-chain via `DataAvailability.sol` as `ContentType.Evidence` (platform pinning node auto-pins upon `CIDRegistered` event), and the ciphertext hash is recorded on-chain with a block timestamp. Submissions after the evidence deadline revert. Each party is capped at **20 evidence submissions** per dispute (`MAX_EVIDENCE_PER_PARTY`) to bound gas costs and prevent evidence-flooding attacks. After the evidence deadline passes, either party or the platform admin (`PLATFORM_ADMIN` role) calls `closeEvidencePhase()` to transition the dispute to the `AwaitingJudge` phase. (On-chain contracts cannot execute timed transitions automatically — an explicit transaction is required.) |
 | **3** | Platform Admin | `assignJudge()` | A `PLATFORM_ADMIN` assigns a judge with relevant domain expertise. The `assignJudge()` function accepts the judge address and a **33-byte compressed ephemeral public key** $(pk_{\text{judge}}^{\text{eph}})$ specific to this dispute. The function atomically: (a) records the judge address and ephemeral key on-chain, (b) **grants the `PLATFORM_JUDGE` role** to the judge via `AccessControl`, enabling them to call `submitRuling()`, (c) starts the key distribution timer ($T_{\text{keyDistribution}}$ = 2 days), and (d) transitions the dispute to the `KeyDistribution` phase. The ephemeral public key is emitted in a `JudgeAssigned(disputeId, judgeAddress, ephemeralPubKey)` event. This ensures that even if a judge's long-term identity key is compromised, no historical dispute content is exposed — each dispute's decryption capability is isolated to its ephemeral key. |
@@ -296,7 +296,7 @@ When a client rejects a milestone or either party believes the other is acting i
 All three rulings support a **parameterized fund split** via `freelancerShareBps` (0–10000), allowing the judge to make proportional rather than all-or-nothing decisions. The dispute fee is **refunded to the initiating party if they win**; if the initiator loses, the fee goes to the **platform treasury** (it is never sent to the opposing party). For inconclusive rulings, the fee is sent to the platform treasury.
 
 | Ruling | Effect on Funds | Effect on Deposits & Bonds | Effect on Reputation |
-|--------|----------------|---------------------------|---------------------|
+| ------ | --------------- | ------------------------- | -------------------- |
 | **1 — Freelancer Wins** | Milestone funds split per the judge's `freelancerShareBps` (must be > 50%), minus 2% protocol fee. The freelancer receives the majority; any remainder goes to the client. | Freelancer deposit untouched. Dispute fee **refunded to the initiator** if the freelancer initiated the dispute; otherwise sent to the **platform treasury** (the losing client's fee is not given to the freelancer). Up to 3% of milestone value is slashed from the client's behavior bond and **sent to the platform treasury** (not to the freelancer). | Client: lost-dispute penalty ($L \times 0.3$). Freelancer: milestone credited at 0.5× multiplier (dispute win). |
 | **2 — Client Wins** | Milestone funds split per the judge's `freelancerShareBps` (must be < 50%), minus 2% protocol fee. The client receives the majority; any remainder goes to the freelancer. | Freelancer's deposit may be partially slashed: the contract first calculates the **proportional deposit** for this milestone (`freelancerDeposit × milestoneValue / totalJobValue`), then slashes up to `depositSlashBps` (capped at 50%) of that proportional amount; **slashed amount goes to the platform treasury**. Dispute fee **refunded to the initiator** if the client initiated the dispute; otherwise sent to the **platform treasury** (the losing freelancer's fee is not given to the client). Behavior bond untouched. | Freelancer: lost-dispute penalty ($L \times 0.3$). Client: no penalty. |
 | **0 — Inconclusive** | Funds split per the judge's `freelancerShareBps` (any value 0–100%), minus 2% protocol fee. Default is 50/50. | Both deposits untouched (the contract enforces `depositSlashBps == 0` for Inconclusive rulings). Dispute fee sent to the **platform treasury** (not refunded to either party). | No reputation penalty for either party. |
@@ -304,7 +304,7 @@ All three rulings support a **parameterized fund split** via `freelancerShareBps
 ### 3.5 Timeout & Non-Cooperation Rules
 
 | Timeout | Duration | Effect |
-|---------|----------|--------|
+| ------- | -------- | ------ |
 | **$T_{\text{evidence}}$** | 5 days | Both parties submit evidence. Late evidence is rejected (transaction reverts). After the deadline, either party or a `PLATFORM_ADMIN` can call `closeEvidencePhase()` to transition the dispute to `AwaitingJudge`. |
 | **$T_{\text{keyDistribution}}$** | 2 days (after judge assignment) | Both parties must distribute $\text{Enc}(pk_{\text{judge}}, K_{job})$ to the judge. |
 | **$T_{\text{ruling}}$** | 14 days (after both keys distributed, i.e., after dispute enters `UnderReview` phase) | Judge must submit ruling. If the judge fails to rule within $T_{\text{ruling}}$, **anyone** can call `claimRulingDefault()` to revoke the failed judge's `PLATFORM_JUDGE` role, reset key submission state (both parties must re-distribute keys to the new judge), clear the judge and ephemeral public key, and transition the dispute back to `AwaitingJudge` for reassignment. |
@@ -312,7 +312,7 @@ All three rulings support a **parameterized fund split** via `freelancerShareBps
 **Key non-cooperation handling via `claimKeyDefault()`:**
 
 | Scenario | Consequence |
-|----------|-------------|
+| -------- | ----------- |
 | Client fails to submit key within $T_{\text{keyDistribution}}$ | Default ruling: `FreelancerWins` with `freelancerShareBps = 10000` (100% to freelancer). No deposit slash. |
 | Freelancer fails to submit key within $T_{\text{keyDistribution}}$ | Default ruling: `ClientWins` with `freelancerShareBps = 0` (100% to client). Deposit slashed at 50% (`KEY_DEFAULT_SLASH_BPS = 5000`). |
 | Both parties fail to submit keys | Default ruling: `Inconclusive` with `freelancerShareBps = 5000` (50/50 split). No deposit slash. |
@@ -323,7 +323,7 @@ All three rulings support a **parameterized fund split** via `freelancerShareBps
 The privacy model from the full design is **fully preserved and extended**, with the judge replacing the jurors and additional layers for ephemeral key isolation, least-privilege access, ciphertext expiry, and an explicit metadata privacy boundary:
 
 | Layer | Mechanism | Guarantee |
-|-------|-----------|-----------|
+| ----- | --------- | --------- |
 | **Layer 1** — Per-job symmetric key | $K_{job}$ generated at `postJob()`, all content AES-256 encrypted before IPFS upload | No plaintext on-chain or public IPFS |
 | **Layer 2** — ECDH key exchange | Client sends $\text{Enc}(pk_{\text{freelancer}}, K_{job})$ at selection | Only client and freelancer can read job content |
 | **Layer 3** — Ephemeral per-dispute key distribution | For each dispute, the judge generates a fresh ephemeral keypair $(pk_{\text{judge}}^{\text{eph}}, sk_{\text{judge}}^{\text{eph}})$. Both parties send $\text{Enc}(pk_{\text{judge}}^{\text{eph}}, K_{job})$. The ephemeral private key is deleted after the ruling is executed. | Judge gains access only after assignment via a dispute-scoped key. Compromising the judge's long-term identity key does not expose any historical dispute content. Each dispute has cryptographic isolation from all others. |
@@ -339,7 +339,7 @@ The privacy model from the full design is **fully preserved and extended**, with
 
 ## 4. State Machine
 
-```
+```text
     ┌──────────┐
     │   OPEN   │  Client posts job + locks funds
     └────┬─────┘  (T_review chosen & stored on-chain)
@@ -396,11 +396,13 @@ The privacy model from the full design is **fully preserved and extended**, with
 ```
 
 **Job terminal states:**
+
 - **COMPLETED** — All milestones have reached a terminal milestone status (`Approved`, `AutoApproved`, or `Resolved`). Freelancer deposit and client behavior bond (remaining after any dispute slashing) are refunded. Reputation is updated for both parties. Data retention expiry is set to 21 days post-completion.
 - **CANCELLED** — Reached via mutual agreement (in ACTIVE state) or unilateral withdrawal (in OPEN/APPLICATIONS states). Fund disposition follows the state-dependent cancellation rules defined in §2.6: unilateral cancellation before freelancer commitment returns 100% of escrow; mutual cancellation after work begins returns only the remaining (undelivered) milestones' escrow, preserving already-released funds. Cancellation incurs a reputation penalty for the initiating party ($C \times 0.1$ in the scoring formula) except when cancelling from OPEN state with no applicants.
 - **ABANDONED** — Freelancer misses deadline ($T_{\text{deadline}}$); deposit forfeited to the **platform treasury**, escrow returned to client.
 
 **Milestone terminal statuses:**
+
 - **Approved** — Client explicitly approved the deliverable.
 - **AutoApproved** — Review timeout expired without client action.
 - **Resolved** — Dispute ruling executed; funds distributed per the judge's ruling. This is distinct from Approved/AutoApproved to preserve an audit trail showing the milestone went through dispute resolution.
@@ -412,7 +414,7 @@ The privacy model from the full design is **fully preserved and extended**, with
 ### 5.1 Deposits, Stakes & Bonds
 
 | Parameter | Value | Purpose |
-|-----------|-------|---------|
+| --------- | ----- | ------- |
 | **Client Escrow** | 100% of total job value (USDC) | Guarantees funds exist. Client cannot run away with work. |
 | **Client Behavior Bond** | **Graduated by tier**: 7.5% (New), 5% (Bronze), 2.5% (Silver), 1% (Gold) of total job value | Deters frivolous disputes and dispute harassment. All tiers are required to post a bond, but the amount decreases with trust. Refunded if no disputes are lost. **Any bond slashing goes to the platform treasury**, eliminating incentives for the counterparty to provoke disputes for profit. |
 | **Freelancer Deposit** | **Graduated by tier**: 7.5% (New), 5% (Bronze), 2.5% (Silver), 1% (Gold) of total job value (USDC) | Skin-in-the-game. Deters abandonment and garbage delivery. The deposit amount decreases with trust, mirroring the client behavior bond structure. Forfeited on abandonment. **Any deposit slashing goes to the platform treasury**. |
@@ -421,7 +423,7 @@ The privacy model from the full design is **fully preserved and extended**, with
 ### 5.2 Fee Structure
 
 | Fee | Rate | Notes |
-|-----|------|-------|
+| --- | ---- | ----- |
 | **Protocol Fee** | 2% of released funds | 5–10× cheaper than Upwork/Fiverr. Collected by the protocol treasury. |
 | **Dispute Fee** | Scaled: $\max(50\text{ USDC},\; 10\% \times V_{\text{milestone}})$ | Paid by the party raising the dispute in USDC. **Refunded to the initiator if they win**; if the initiator loses, sent to the **platform treasury** (never to the opposing party). For inconclusive rulings, sent to the treasury. The 10% rate scales with milestone value, while the $50 minimum ensures meaningful cost. Using USDC ensures fee predictability — no oracle dependency or ETH price exposure. |
 | **Gas Costs** | Near-zero on L2 | Deployed on L2 (e.g., Base, Polygon PoS). |
@@ -431,6 +433,7 @@ The privacy model from the full design is **fully preserved and extended**, with
 The system is designed so that **honest behavior is the dominant strategy** for every participant:
 
 **Clients are incentivized to approve valid work promptly because:**
+
 - Stalling is useless: auto-approve timeout ($T_{\text{review}}$, which *they chose*) releases funds automatically.
 - Filing a dishonest dispute costs the dispute fee, which they lose if the judge rules against them.
 - Behavior bond penalty: clients who lose a dispute forfeit up to 3% of the milestone value from their behavior bond to the **platform treasury**. Since slashed funds go to the platform rather than the counterparty, neither side can profit by provoking disputes.
@@ -438,12 +441,14 @@ The system is designed so that **honest behavior is the dominant strategy** for 
 - Client-specific behavioral metrics (cancellation rate, auto-approve frequency, dispute initiation rate) are tracked on-chain.
 
 **Freelancers are incentivized to deliver quality work because:**
+
 - Their **graduated deposit** (7.5% New, 5% Bronze, 2.5% Silver, 1% Gold) is at stake — abandoning or delivering garbage means losing it.
 - Milestones limit exposure: they receive payment incrementally.
 - Good reputation (value-weighted, on-chain, soulbound) leads to more opportunities.
 - They can see the client's chosen $T_{\text{review}}$ before accepting — no hidden stalling window.
 
 **The platform judge is incentivized to rule fairly because:**
+
 - Under the centralized model, we assume the platform has a reputational and business incentive to provide fair rulings (similar to how traditional escrow services operate).
 - Ruling reasoning is hashed and recorded on-chain for transparency and auditability.
 - If the platform consistently rules unfairly, users will leave — the platform's revenue (2% protocol fee) depends on user trust and volume.
@@ -455,6 +460,7 @@ A party should raise a dispute when the expected value is positive:
 $$E[\text{dispute}] = P(\text{win}) \times V_{\text{milestone}} - (1 - P(\text{win})) \times (F_{\text{dispute}} + B_{\text{bond\_slash}}) > 0$$
 
 where:
+
 - $V_{\text{milestone}}$ = value of the disputed milestone
 - $F_{\text{dispute}} = \max(50\text{ USDC},\; 10\% \times V_{\text{milestone}})$ — scales with milestone value, denominated in the same stablecoin as all payments. **Refunded to the initiator if they win**; otherwise sent to the platform treasury.
 - $B_{\text{bond\_slash}}$ = behavior bond penalty (graduated by tier: 7.5% New, 5% Bronze, 2.5% Silver, 1% Gold — slashed to treasury)
@@ -478,7 +484,7 @@ $$\text{score}_{\text{client}} = \text{totalValueCompleted} \times \frac{\text{j
 **Graduated trust tiers (on-chain, computed by `Reputation.sol`):**
 
 | Tier | Freelancer Criteria | Client Criteria | Behavior Bond Rate | Freelancer Deposit Rate |
-|------|---------------------|----------------|--------------------|-----------------------|
+| ---- | ------------------- | --------------- | ------------------ | ----------------------- |
 | New | 0 completed value | 0 completed value | 7.5% | 7.5% |
 | Bronze | ≥ $1,000 completed value, completion ratio > 50% (based on `jobsCompleted / (jobsCompleted + disputesLost + cancellations)`) | ≥ $1,000 completed value, completion ratio > 50% (based on `jobsCompleted / jobsPosted`) | 5% | 5% |
 | Silver | ≥ $10,000 completed value, completion ratio > 75% | ≥ $10,000 completed value, completion ratio > 75%, auto-approve rate < 20% (based on `autoApproveCount / totalMilestoneCount` across all completed jobs) | 2.5% | 2.5% |
@@ -495,7 +501,7 @@ All defenses from the full design are preserved. The shift to centralized disput
 ### 6.1 Attacks by Clients
 
 | Attack | How It Works | Defense |
-|--------|-------------|---------|
+| ------ | ------------ | ------- |
 | **Free Work Attack** | Client posts a job to extract free consulting, never intending to hire. | **Milestone structure**: no significant work is done before escrow is locked and freelancer stakes. During the application phase, freelancers only submit a proposal — no work is performed. |
 | **Disappearing Client** | Client locks funds, freelancer submits work, client never reviews — hoping to stall. | **Auto-approve timeout ($T_{\text{review}}$)**. The client *chose* this timeout — they cannot claim it's unfair. On expiry, funds release automatically. |
 | **Stalling via Long Timeout** | Client selects the maximum timeout (30 days) to delay payment as long as possible. | **Timeout is visible before applying.** Freelancers can see $T_{\text{review}}$ on-chain and refuse to apply if the timeout is unreasonably long for the job scope. The market self-regulates: clients who set excessively long timeouts attract fewer (or no) applicants. Additionally, the auto-approve rate contributes to the client's reputation score — frequent auto-approves hurt their tier. |
@@ -506,14 +512,14 @@ All defenses from the full design are preserved. The shift to centralized disput
 ### 6.2 Attacks by Freelancers
 
 | Attack | How It Works | Defense |
-|--------|-------------|---------|
+| ------ | ------------ | ------- |
 | **Abandonment** | Freelancer stakes deposit, locks client's funds, then never delivers. | **Freelancer deposit (graduated by tier: 7.5% New, 5% Bronze, 2.5% Silver, 1% Gold)** is forfeited to the **platform treasury** if no submission by $T_{\text{deadline}}$. Client calls `claimAbandonment()` → escrow returned to client. |
 | **Low-Quality Delivery** | Freelancer delivers substandard work that technically "meets" requirements. | **Agreement hash on-chain**: `agreementHash = keccak256(scope, milestones, criteria)`. The judge evaluates work against this immutable specification. MetaEvidence frames the dispute as a structured question. |
 
 ### 6.3 Attacks on Dispute Resolution
 
 | Attack | How It Works | Defense |
-|--------|-------------|---------|
+| ------ | ------------ | ------- |
 | **Judge Bribery** | A party bribes the platform-assigned judge. | This is a **known trade-off** of the centralized model. We mitigate it by: (1) the platform's business-level incentive to maintain neutrality, (2) ruling reasoning hashed on-chain for auditability, (3) the platform can assign a *panel* of judges for high-value disputes to reduce single-point corruption, (4) **ephemeral per-dispute keypairs** ensure that a compromised judge cannot retroactively access other disputes' content. In a future version, this can be upgraded to decentralized arbitration. |
 | **Platform Bias** | The platform systematically favors one side (e.g., always ruling for clients to attract more business). | On-chain ruling records are **publicly auditable**. Anyone can analyze the platform's ruling history for bias. If bias is detected, users will migrate to competing platforms — the 2% fee revenue depends on user trust. |
 | **Evidence Tampering** | A party alters evidence after submission. | Evidence hashes and CIDs are recorded on-chain with block timestamps during $T_{\text{evidence}}$ via `DataAvailability.sol`. The salted `agreementHash = keccak256(salt ‖ plaintext)` anchor prevents altering the original agreement — and the embedded salt ensures that even knowledge of the agreement's structure cannot be used to forge a matching hash without possessing $K_{job}$. All evidence is encrypted and stored on IPFS — immutable once pinned, and the platform pinning node guarantees continued availability (see §6.4, IPFS Data Unavailability). |
@@ -521,7 +527,7 @@ All defenses from the full design are preserved. The shift to centralized disput
 ### 6.4 Platform-Level Attacks
 
 | Attack | Defense |
-|--------|---------|
+| ------ | ------- |
 | **Smart Contract Exploits** (reentrancy, overflow) | OpenZeppelin's `ReentrancyGuard` on all fund-transferring functions. Solidity 0.8+ built-in overflow checks. `SafeERC20` for all token transfers. Pull-over-push payment pattern (withdrawable balances). OpenZeppelin `PausableUpgradeable` provides an emergency circuit-breaker — the admin can pause all state-mutating user-facing functions on `JobEscrow.sol`. All core contracts are deployed behind **UUPS proxies** for safe upgradeability, with upgrade authorization restricted to `DEFAULT_ADMIN_ROLE`. `AccessControlDefaultAdminRulesUpgradeable` enforces a time-delayed admin transfer process, preventing instantaneous takeover of admin privileges. |
 | **State Race Conditions** (competing transactions on the same milestone in the same block) | **Per-milestone state mutex**: every state-mutating function checks and immediately updates `milestone.status` before any external calls (checks-effects-interactions). Competing transactions (e.g., `approveMilestone()` vs. `triggerAutoApprove()`, or `raiseDispute()` vs. `triggerAutoApprove()`) are serialized by the EVM — only the first to execute succeeds; the second reverts on the stale status check. When `raiseDispute()` wins the race, the milestone transitions to `DISPUTED`, **funds are frozen, and the auto-approve timer is paused** — no automated release can occur until the platform signals manual resolution via `executeRuling()`. All terminal operations are **idempotent** (guarded by a `processed` flag). `raiseDispute()` is only callable while `milestone.status == IN_REVIEW`, ensuring disputes cannot override already-approved milestones. See §2.5 for full rules. |
 | **Cross-Contract State Inconsistency** (fund state updated but reputation not, or vice versa) | **Single authority model**: `JobEscrow.sol` is the sole custodian of fund and milestone state. `Dispute.sol` calls a restricted interface (`executeDisputeRuling()`) on `JobEscrow.sol` to apply rulings — it never holds or moves funds directly. Reputation updates are direct synchronous cross-contract function calls (e.g., `reputation.recordMilestoneCompletion()`, `reputation.recordClientDisputeLoss()`) triggered atomically within the same transaction — not event-based. If any sub-step fails, the entire transaction reverts — no partial state updates are possible. |
@@ -535,7 +541,7 @@ All defenses from the full design are preserved. The shift to centralized disput
 All defenses from the full design are preserved:
 
 | Defense Layer | Mechanism |
-|--------------|-----------|
+| ------------- | --------- |
 | **Economic cost** | Self-trading costs ≥ 2% of face value in irrecoverable protocol fees. Farming $10,000 of reputation burns $200. |
 | **Reputation formula** | Value-weighted (one $10,000 job = 100 × $100 jobs). Dispute-penalized ($L \times 0.3$ divisor). |
 | **On-chain detection** | Address graph analysis, abnormal completion times, cyclic fund flows, same-pair patterns. |

@@ -7,7 +7,7 @@
 ## 1. Freelancers Scammed / Not Paid Despite Completing Work
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | 2017 | A freelancer completed 95% of an Amazon Enhanced Brand Content page. The client cancelled the fixed-price contract with only one minor edit remaining, taking all the completed work. The freelancer provided full evidence to Upwork. (Reddit r/freelance, 71 upvotes, 43 comments) | Upwork required **paid arbitration** ($291 filing fee) to resolve the dispute — prohibitively expensive for the small contract. Freelancer was effectively unpaid. |
 | 2 | **Upwork** | 2023 | A freelancer hired as an IT specialist had their Synology NAS accessed ~20 times by the client's freelancer who installed an unauthorized OpenVPN config. The freelancer's client data was compromised, resulting in an insurance claim ($5,000 deductible) and legal notifications. (Reddit r/Upwork, detailed user report) | Upwork "wouldn't really acknowledge or do anything besides say they understand my frustration." The freelancer's feedback was removed. The offending freelancer blocked the victim on all channels. |
 | 3 | **Fiverr** | 2026 | A freelancer (Morocco) delivered work, client accepted it, then later contacted Fiverr support to cancel the order. The client received a full refund while the freelancer was never contacted about the dispute. (Trustpilot, March 2026) | Fiverr refunded the buyer without consulting the seller. Freelancer received **zero payment** for completed and accepted work. |
@@ -21,7 +21,7 @@
 ## 2. Clients Scammed (Freelancer Took Money, Didn't Deliver)
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | 2026 | Client spent **$2,000** on a developer with ~5 stars and 95% completion rate. Developer did a "horrible job", project took over 3 months, website was not built correctly. (Trustpilot, Nikolaos Kiourtzidis) | Client lost $2,000+ and still had an unusable website. |
 | 2 | **Upwork** | 2026 | Client reports spending **over $60,000** cumulatively on Upwork developers with consistently poor results. Many freelancers didn't deliver as promised. (Trustpilot, Stevens) | "Very expensive experience and poor developer results... I unfortunately cannot recommend the platform." |
 | 3 | **Fiverr** | 2026 | Client (UK) reports losing **nearly £1,000** across multiple transactions with no work delivered. Claims reviews on profiles are fake and dates "do not tally at all." Attempted to contact support multiple times. (Trustpilot, S Khan, 1-star) | "No one has bothered to respond... How is this company still operating is beyond me!" |
@@ -35,7 +35,7 @@
 ### Upwork Fee History
 
 | Period | Fee Structure | Notes |
-|--------|--------------|-------|
+| -------- | -------------- | ------- |
 | Pre-2016 (oDesk era) | **Flat 10%** on all earnings | Simple, transparent |
 | 2016–2023 | **Sliding scale**: 20% on first $500 with each client, 10% on $500.01–$10,000, 5% above $10,000 | Widely criticized. New freelancers effectively pay 20% on most work. Penalizes those with many small clients. |
 | 2023–present | **Flat 10%** service fee on all contracts | Announced as a "simplification" but was effectively a fee increase for established freelancers who previously reached the 5% tier. |
@@ -45,7 +45,7 @@
 ### Fiverr Fee Structure
 
 | Component | Rate | Notes |
-|-----------|------|-------|
+| ----------- | ------ | ------- |
 | Seller service fee | **20%** of every order | One of the highest in the industry. A freelancer earning $100 receives only $80. |
 | Buyer service fee | **5.5%** of purchase (or $2.50 on purchases up to $50) | Charged on top of the listed price |
 | Currency conversion | Additional spread | Sellers report effective earnings further reduced by unfavorable conversion rates |
@@ -54,7 +54,7 @@
 ### Freelancer.com Fee Structure
 
 | Component | Rate | Notes |
-|-----------|------|-------|
+| ----------- | ------ | ------- |
 | Freelancer fee | **10%** (or 3% with paid membership) | Minimum fee of $5 per project |
 | Membership tiers | $0–$59.95/month | Reduced fees require ongoing subscription |
 | Bid system | Limited free bids, replenished periodically | Additional bids require paid membership |
@@ -72,7 +72,7 @@
 ## 4. Dispute Resolution Problems
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | 2017 | Freelancer completed 95% of work, client cancelled. Upwork required **paid arbitration ($291 fee)** to resolve a dispute for a small contract. (Reddit r/freelance) | Freelancer couldn't afford arbitration for a low-value contract. Client kept completed work for free. |
 | 2 | **Upwork** | 2026 | Client experienced critical live production pages going down during active contract. Filed dispute. (Trustpilot, Ken Ajudua, 1-star) | "Left me disappointed with how disputes are handled on the platform." Resolution details unclear. |
 | 3 | **Fiverr** | 2026 | Client's order with "Vetted Pro" seller resulted in unusable hard-coded website. Freelancer went unresponsive for 5+ weeks. Client filed dispute with evidence. | Fiverr denied refund (outside 14-day window). Only offered platform credits. "Policies seemed to protect the seller rather than the customer." |
@@ -85,7 +85,7 @@
 ## 5. Account Suspension Horror Stories
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | 2025 | "I Built My Profile Over 7 Years. Upwork Destroyed it in a Day" — Top-rated freelancer's account suspended without clear explanation. (Reddit, 196 upvotes, 81 comments) | Account destroyed. Years of reputation, client relationships, and earnings history gone overnight. |
 | 2 | **Upwork** | 2024 | "Suspended after 14 years on platform" — Veteran freelancer with long history suddenly banned. (Reddit, 193 upvotes, 106 comments) | No recourse. 14 years of professional history erased. |
 | 3 | **Upwork** | 2025 | "8 Years, 100+ 5 Star Reviews, and No Explanation" — Freelancer with pristine record suspended. Multiple follow-up posts documenting the struggle. (Reddit, 137 upvotes, 87 comments) | Platform provided no explanation despite 100+ perfect reviews. |
@@ -106,7 +106,7 @@
 ## 6. Data / Policy Issues
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Elance (pre-Upwork)** | 2009 | A hacker breached Elance and obtained personal details of **more than 1.3 million registered users** — including names, addresses, passwords, and associated email account data. (IBTimes, Wikipedia) | Massive data breach. Users' personal and financial info compromised. |
 | 2 | **Freelancer.com** | 2015 | The Australian Office of the Information Commissioner (OAIC) found Freelancer guilty of **breaching the Privacy Act**. Employees publicly exposed a former user's private information, IP addresses, and pseudonyms on Wikipedia and elsewhere after the individual wrote critical blog posts about the company. (The Register, Sydney Morning Herald, OAIC ruling) | Freelancer fined **$20,000 in aggravated damages**, ordered to issue written apology and provide staff privacy training. Freelancer announced intent to appeal. |
 | 3 | **Freelancer.com** | 2018 | Another privacy complaint filed with OAIC by an EU user, claiming damages of **over $60,000**. Alleged violations of both Australian and European privacy legislation affecting all European customers. (InnovationAus, Data Privacy Philippines) | Complaint under investigation. Implications for GDPR compliance raised. |
@@ -121,7 +121,7 @@
 ## 7. Geographic Discrimination
 
 | # | Platform | Year | Incident | Outcome |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | 2022 | Upwork suspended all operations for freelancers and clients in **Russia and Belarus** following Russia's invasion of Ukraine (March 7, 2022). CEO Hayden Brown issued a public letter. (Upwork blog, Wikipedia) | All Russian/Belarusian freelancers lost access to their accounts, earnings history, and ongoing contracts overnight. Political sanctions applied to individual workers. |
 | 2 | **Upwork** | 2026 | US-based reviewer: "Upwork draining all the jobs from the US to foreign countries where millions of Americans remain jobless. I am a US citizen and I myself tried to get jobs from Upwork many times but turned down..." (Trustpilot, March 2026) | Perception of bias toward cheaper international labor at the expense of domestic workers. |
 | 3 | **Fiverr** | Ongoing | Freelancers from developing countries (India, Pakistan, Nigeria, etc.) report: lower visibility, algorithm bias toward Western sellers, and earnings further reduced by unfavorable currency conversions and limited withdrawal options. | Systemic disadvantage for freelancers in emerging markets despite being the primary labor supply. |
@@ -134,7 +134,7 @@
 ## 8. Payment Withholding
 
 | # | Platform | Year | Incident | Details |
-|---|----------|------|----------|---------|
+| --- | ---------- | ------ | ---------- | --------- |
 | 1 | **Upwork** | Ongoing | Standard payment cycle: Clients fund escrow → work completed → 5-day "security period" after release → then withdrawal processing (1–5 business days depending on method). Total: **7–14 days** from work completion to receiving money. | "5 days retaining payment is unusual" (Trustpilot, March 2026). For hourly contracts, billing cycle means even longer waits. |
 | 2 | **Fiverr** | Ongoing | Fiverr holds completed order payments for **14 days** before funds become available for withdrawal (new sellers face even longer holds). Withdrawal then takes additional 1–7 days. | Total wait: **2–3 weeks** from order completion to bank deposit. Fiverr earns interest on float. |
 | 3 | **Fiverr** | 2026 | When accounts are restricted/suspended, Fiverr holds funds for **90 days** before allowing withdrawal. (Multiple Trustpilot reports, 2026) | Freelancers can't access earned money for 3 months during account disputes. No interest paid to the freelancer. |
@@ -148,7 +148,7 @@
 ### The Trust Problem
 
 | Issue | Root Cause | Impact |
-|-------|-----------|--------|
+| ------- | ----------- | -------- |
 | No payment guarantee | Escrow relies on platform as trusted third party | Freelancers do unpaid work; clients get scammed |
 | Opaque dispute resolution | Platform is judge, jury, executioner | Neither party trusts the process |
 | Non-portable reputation | Reviews/ratings locked in platform silos | Vendor lock-in; losing account = losing career |
