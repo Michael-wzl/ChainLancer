@@ -303,21 +303,6 @@ export default function UserGuide() {
             <li>
               <strong>Google Chrome</strong> browser (MetaMask requires Chrome)
             </li>
-            <li>
-              <strong>MetaMask</strong> browser extension —{" "}
-              <a
-                href="https://metamask.io/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-brand-600 hover:underline inline-flex items-center gap-1"
-              >
-                Install MetaMask
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            </li>
-            <li>
-              Base Sepolia testnet ETH (for gas fees) and USDC (for payments)
-            </li>
           </ul>
 
           <h3 className="font-semibold text-gray-700 mb-2">Quick Start</h3>
