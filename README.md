@@ -6,6 +6,8 @@ For the full design rationale and architecture, see the [WorkFlow Documentation]
 
 For the market analysis on why we need a decentralized freelance platform, see the [Market Analysis Report](docs/MarketAnalysis.md).
 
+Note that this README is for Unix-based systems (Linux, macOS). Windows users may need to adjust commands accordingly.
+
 **Tech stack:** Solidity 0.8.24 · Hardhat · OpenZeppelin (UUPS upgradeable) · React 18 · Vite · Tailwind CSS · ethers.js v6 · Redux Toolkit · IPFS (Pinata)
 
 ---
@@ -220,7 +222,7 @@ VITE_DATA_AVAILABILITY_ADDRESS=0x...
 
 #### Import test accounts
 
-1. MetaMask → Account → Three dots → **Import Wallet** → **Private Key**.
+1. MetaMask → Account → Add wallet → Import an account → Select Type: **Private Key**.
 2. Paste a private key from the `npx hardhat node` output.
 3. Repeat for at least Account #0 and Account #1.
 
