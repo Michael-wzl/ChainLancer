@@ -340,10 +340,11 @@ export default function DisputeDetail() {
           );
         })()}
 
-      {/* Close Evidence Phase button */}
+      {/* Close Evidence Phase button — only client, freelancer, or admin can close */}
       {dispute.phase === DisputePhase.Evidence &&
         dispute.evidenceDeadline > 0 &&
-        blockNow > dispute.evidenceDeadline && (
+        blockNow > dispute.evidenceDeadline &&
+        (isClient || isFreelancer) && (
           <div className="card">
             <div className="flex items-center gap-2 mb-3">
               <Clock className="h-4 w-4 text-orange-500" />
