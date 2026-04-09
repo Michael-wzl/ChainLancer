@@ -77,9 +77,6 @@ export default function PostJob() {
   const tierKey = (["New", "Bronze", "Silver", "Gold"] as const)[clientTier];
   const bondBps = BEHAVIOR_BOND_BPS[tierKey];
   const behaviorBond = (totalValue * BigInt(bondBps)) / 10000n;
-  const freelancerDepositBps = FREELANCER_DEPOSIT_BPS["New"];
-  const freelancerDeposit =
-    (totalValue * BigInt(freelancerDepositBps)) / 10000n;
   const totalRequired = totalValue + behaviorBond;
 
   // ─── Milestone management ───
@@ -109,6 +106,25 @@ export default function PostJob() {
     setMilestones(updated);
   };
 
+  // ─── Milestone validation helpers ───
+  const MIN_MILESTONE_BPS = 1000n; // 10%
+
+  /**
+   * Returns the list of milestone indices that are below the 10% minimum.
+   * Only checks when totalValue > 0 so we don't divide by zero.
+   */
+  const milestoneBelowMinimum: boolean[] = milestones.map((ms) => {
+    if (totalValue === 0n) return false;
+    try {
+      const val = parseUSDC(ms.value || "0");
+      return (val * 10_000n) / totalValue < MIN_MILESTONE_BPS;
+    } catch {
+      return false;
+    }
+  });
+
+  const hasMilestoneBelowMinimum = milestoneBelowMinimum.some(Boolean);
+
   // ─── Submit ───
   const handleSubmit = useCallback(async () => {
     if (!address) {
@@ -124,6 +140,26 @@ export default function PostJob() {
     if (milestones.some((ms) => !ms.value || parseUSDC(ms.value) === 0n)) {
       toast.error("All milestones must have a value greater than 0.");
       return;
+    }
+    // Check minimum milestone percentage (must be ≥ 10% of total value)
+    if (totalValue > 0n) {
+      const violating = milestones
+        .map((ms, i) => ({ ms, i }))
+        .filter(({ ms }) => {
+          try {
+            const val = parseUSDC(ms.value || "0");
+            return (val * 10_000n) / totalValue < MIN_MILESTONE_BPS;
+          } catch {
+            return false;
+          }
+        });
+      if (violating.length > 0) {
+        const names = violating.map(({ i }) => `#${i + 1}`).join(", ");
+        toast.error(
+          `Milestone ${names} ${violating.length === 1 ? "is" : "are"} below the 10% minimum. Each milestone must be at least 10% of the total job value.`
+        );
+        return;
+      }
     }
 
     try {
@@ -428,9 +464,19 @@ export default function PostJob() {
                         updateMilestone(idx, "value", e.target.value)
                       }
                       placeholder="1000"
-                      className="input"
+                      className={`input ${
+                        milestoneBelowMinimum[idx]
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-200"
+                          : ""
+                      }`}
                       required
                     />
+                    {milestoneBelowMinimum[idx] && (
+                      <p className="text-xs text-red-500 mt-1">
+                        Must be ≥ 10% of total job value (
+                        {formatUSDC(totalValue / 10n)} USDC)
+                      </p>
+                    )}
                   </div>
                   <div className="sm:col-span-1">
                     <label className="label">Deadline (days)</label>
@@ -463,6 +509,18 @@ export default function PostJob() {
           </div>
         </div>
 
+        {/* Milestone validation warning */}
+        {hasMilestoneBelowMinimum && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-start gap-2">
+            <Info className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-400" />
+            <span>
+              <strong>Invalid milestone allocation:</strong> Each milestone must
+              represent at least <strong>10%</strong> of the total job value.
+              Please adjust the highlighted milestone values.
+            </span>
+          </div>
+        )}
+
         {/* Cost Summary */}
         <div className="card bg-gray-50 border border-gray-200">
           <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
@@ -487,9 +545,18 @@ export default function PostJob() {
                 {formatUSDC(totalRequired)}
               </span>
             </div>
-            <div className="flex justify-between text-xs text-gray-400 mt-2">
-              <span>Freelancer Deposit ({freelancerDepositBps / 100}% — New tier, varies by tier)</span>
-              <span>{formatUSDC(freelancerDeposit)}</span>
+            <div className="mt-3 pt-2 border-t border-gray-200">
+              <p className="text-xs text-gray-500 mb-1.5 font-medium">Freelancer Deposit (paid by freelancer, varies by their tier):</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-gray-400">
+                <span>New — {FREELANCER_DEPOSIT_BPS.New / 100}%</span>
+                <span>{formatUSDC((totalValue * BigInt(FREELANCER_DEPOSIT_BPS.New)) / 10000n)}</span>
+                <span>Bronze — {FREELANCER_DEPOSIT_BPS.Bronze / 100}%</span>
+                <span>{formatUSDC((totalValue * BigInt(FREELANCER_DEPOSIT_BPS.Bronze)) / 10000n)}</span>
+                <span>Silver — {FREELANCER_DEPOSIT_BPS.Silver / 100}%</span>
+                <span>{formatUSDC((totalValue * BigInt(FREELANCER_DEPOSIT_BPS.Silver)) / 10000n)}</span>
+                <span>Gold — {FREELANCER_DEPOSIT_BPS.Gold / 100}%</span>
+                <span>{formatUSDC((totalValue * BigInt(FREELANCER_DEPOSIT_BPS.Gold)) / 10000n)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -508,6 +575,7 @@ export default function PostJob() {
             onClick={handleSubmit}
             isLoading={isLoading}
             variant="primary"
+            disabled={hasMilestoneBelowMinimum}
           >
             <PlusCircle className="mr-1.5 h-4 w-4" /> Post Job
           </TransactionButton>
