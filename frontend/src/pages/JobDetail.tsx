@@ -423,8 +423,8 @@ export default function JobDetail() {
               {job.cancellationRequestor?.toLowerCase() === address?.toLowerCase()
                 ? "You have requested cancellation. Waiting for the counterparty to accept."
                 : job.cancellationRequestor?.toLowerCase() === job.client.toLowerCase()
-                  ? "The client has requested cancellation. You may accept or continue working."
-                  : "The freelancer has requested cancellation. You may accept or continue working."}
+                  ? "The client has requested cancellation."
+                  : "The freelancer has requested cancellation."}
             </p>
           </div>
         </div>
@@ -496,6 +496,17 @@ export default function JobDetail() {
             <h2 className="text-lg font-semibold text-gray-800 mb-3">
               Your Application
             </h2>
+            {/* Notify applicant when another freelancer has been selected */}
+            {job.state === JobState.Applications &&
+              job.freelancer !== "0x0000000000000000000000000000000000000000" &&
+              job.freelancer.toLowerCase() !== address?.toLowerCase() && (
+              <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-amber-800">
+                  Another freelancer has been selected for this job.
+                </p>
+              </div>
+            )}
             <ApplicationList
               applications={applications.filter(
                 (a) => a.freelancer.toLowerCase() === address?.toLowerCase()
