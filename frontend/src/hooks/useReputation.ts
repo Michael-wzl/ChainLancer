@@ -78,6 +78,19 @@ export function useReputation() {
     [readContracts.reputation]
   );
 
+  const getFreelancerTier = useCallback(
+    async (address: string): Promise<Tier> => {
+      if (!readContracts.reputation) return Tier.New;
+      try {
+        const tier = await readContracts.reputation.getFreelancerTier(address);
+        return Number(tier) as Tier;
+      } catch {
+        return Tier.New;
+      }
+    },
+    [readContracts.reputation]
+  );
+
   const getFreelancerScore = useCallback(
     async (address: string): Promise<bigint> => {
       if (!readContracts.reputation) return 0n;
@@ -106,6 +119,7 @@ export function useReputation() {
     getFreelancerProfile,
     getClientProfile,
     getClientTier,
+    getFreelancerTier,
     getFreelancerScore,
     getClientScore,
   };
@@ -115,32 +129,35 @@ export function useReputation() {
  * Hook that fetches a specific user's profile data.
  */
 export function useUserReputation(address: string | null) {
-  const { getFreelancerProfile, getClientProfile, getClientTier } = useReputation();
+  const { getFreelancerProfile, getClientProfile, getClientTier, getFreelancerTier } = useReputation();
   const [freelancerProfile, setFreelancerProfile] = useState<FreelancerProfile | null>(null);
   const [clientProfile, setClientProfile] = useState<ClientProfile | null>(null);
   const [clientTier, setClientTier] = useState<Tier>(Tier.New);
+  const [freelancerTier, setFreelancerTier] = useState<Tier>(Tier.New);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!address) return;
     setLoading(true);
     try {
-      const [fp, cp, tier] = await Promise.all([
+      const [fp, cp, cTier, fTier] = await Promise.all([
         getFreelancerProfile(address),
         getClientProfile(address),
         getClientTier(address),
+        getFreelancerTier(address),
       ]);
       setFreelancerProfile(fp);
       setClientProfile(cp);
-      setClientTier(tier);
+      setClientTier(cTier);
+      setFreelancerTier(fTier);
     } finally {
       setLoading(false);
     }
-  }, [address, getFreelancerProfile, getClientProfile, getClientTier]);
+  }, [address, getFreelancerProfile, getClientProfile, getClientTier, getFreelancerTier]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  return { freelancerProfile, clientProfile, clientTier, loading, refresh };
+  return { freelancerProfile, clientProfile, clientTier, freelancerTier, loading, refresh };
 }

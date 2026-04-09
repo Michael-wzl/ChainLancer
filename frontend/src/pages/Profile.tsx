@@ -8,22 +8,6 @@ import { ScoreCard } from "../components/reputation/ScoreCard";
 import { JobCard } from "../components/job/JobCard";
 import { Tier } from "../config/constants";
 
-/**
- * Compute a display tier for freelancers based on reputation score thresholds.
- * The contract doesn't have getFreelancerTier(), so we derive it client-side.
- */
-function computeFreelancerTier(profile: { reputationScore: bigint; jobsCompleted: number; disputesLost: number } | null): Tier {
-  if (!profile || profile.jobsCompleted === 0) return Tier.New;
-  const score = Number(profile.reputationScore);
-  const successRate = profile.jobsCompleted > 0
-    ? (profile.jobsCompleted - profile.disputesLost) / profile.jobsCompleted
-    : 0;
-  if (score >= 80 && successRate > 0.9 && profile.jobsCompleted >= 20) return Tier.Gold;
-  if (score >= 50 && successRate > 0.75 && profile.jobsCompleted >= 10) return Tier.Silver;
-  if (score >= 20 && successRate > 0.5 && profile.jobsCompleted >= 3) return Tier.Bronze;
-  return Tier.New;
-}
-
 export default function Profile() {
   const { address: routeAddress } = useParams<{ address: string }>();
   const { address: walletAddress, isConnected } = useWallet();
@@ -36,6 +20,7 @@ export default function Profile() {
     freelancerProfile,
     clientProfile,
     clientTier,
+    freelancerTier,
     loading: repLoading,
   } = useUserReputation(profileAddress ?? null);
   const { jobs, loading: jobsLoading } = useJobList();
@@ -94,7 +79,7 @@ export default function Profile() {
         {/* Freelancer reputation */}
         <ScoreCard
           address={profileAddress}
-          tier={computeFreelancerTier(freelancerProfile)}
+          tier={freelancerTier}
           completedJobs={freelancerProfile?.jobsCompleted ?? 0}
           disputesFiled={freelancerProfile?.disputesLost ?? 0}
           disputesLost={freelancerProfile?.disputesLost ?? 0}
