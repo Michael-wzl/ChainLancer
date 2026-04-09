@@ -23,6 +23,7 @@ import {
   Ruling,
   DISPUTE_PHASE_LABELS,
   MilestoneStatus,
+  ROLES,
 } from "../config/constants";
 
 interface DisputeInfo {
@@ -72,7 +73,30 @@ export default function DisputeDetail() {
   const isJudge =
     address?.toLowerCase() === dispute?.judge?.toLowerCase() &&
     dispute?.judge !== "0x0000000000000000000000000000000000000000";
-  const isAuthorizedViewer = isClient || isFreelancer || isJudge;
+
+  // Admin role check for closing evidence phase
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    const checkAdmin = async () => {
+      if (!readContracts.dispute || !address) {
+        setIsAdmin(false);
+        return;
+      }
+      try {
+        const DEFAULT_ADMIN = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        const [hasAdmin, hasDefault] = await Promise.all([
+          readContracts.dispute.hasRole(ROLES.PLATFORM_ADMIN, address),
+          readContracts.dispute.hasRole(DEFAULT_ADMIN, address),
+        ]);
+        setIsAdmin(hasAdmin || hasDefault);
+      } catch {
+        setIsAdmin(false);
+      }
+    };
+    checkAdmin();
+  }, [readContracts.dispute, address]);
+
+  const isAuthorizedViewer = isClient || isFreelancer || isJudge || isAdmin;
 
   // Fetch dispute info — first resolve disputeId from JobEscrow, then query Dispute contract
   const fetchDispute = useCallback(async () => {
@@ -344,7 +368,7 @@ export default function DisputeDetail() {
       {dispute.phase === DisputePhase.Evidence &&
         dispute.evidenceDeadline > 0 &&
         blockNow > dispute.evidenceDeadline &&
-        (isClient || isFreelancer) && (
+        (isClient || isFreelancer || isAdmin) && (
           <div className="card">
             <div className="flex items-center gap-2 mb-3">
               <Clock className="h-4 w-4 text-orange-500" />
