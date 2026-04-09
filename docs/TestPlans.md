@@ -137,7 +137,7 @@
 
 | Step | Actor | Page / Action | Input / Details | Expected Result |
 |------|-------|---------------|-----------------|-----------------|
-| A6.1 | Freelancer 1 | Navigate to `/wallet` | — | Withdrawable balance = $980 (total milestone value minus 2% fees) |
+| A6.1 | Freelancer 1 | Navigate to `/wallet` | — | Withdrawable balance = $1030 |
 | A6.2 | Freelancer 1 | Click "Withdraw" | MetaMask confirms `withdraw()` | TX succeeds. USDC balance increases. Withdrawable balance = 0. |
 
 ---
