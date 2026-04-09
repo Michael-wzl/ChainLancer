@@ -1,8 +1,10 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { User, Star, ExternalLink, FileText, Loader2, X, CheckCircle, Clock, AlertTriangle, RefreshCw } from "lucide-react";
 import { truncateAddress } from "../../utils/format";
-import { useReputation } from "../../hooks/useReputation";
+import { useReputation, FreelancerProfile } from "../../hooks/useReputation";
 import { TierBadge } from "../common/StatusBadge";
+import { Tier } from "../../config/constants";
+import { useContracts } from "../../contexts/ContractContext";
 import { retrieveFromIPFS } from "../../ipfs/gateway";
 import { eciesDecrypt } from "../../crypto/ecies";
 import { decrypt } from "../../crypto/aes";
@@ -51,6 +53,37 @@ export function ApplicationList({
   // Confirmation dialog state
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<"select" | "reselect" | null>(null);
+
+  // Reputation data for each applicant
+  const { getFreelancerProfile } = useReputation();
+  const { readContracts } = useContracts();
+  const [reputationData, setReputationData] = useState<
+    Record<string, { profile: FreelancerProfile | null; tier: Tier }>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchReputation() {
+      const entries: Record<string, { profile: FreelancerProfile | null; tier: Tier }> = {};
+      await Promise.all(
+        applications.map(async (app) => {
+          const [profile, tier] = await Promise.all([
+            getFreelancerProfile(app.freelancer),
+            readContracts.reputation
+              ? readContracts.reputation
+                  .getFreelancerTier(app.freelancer)
+                  .then((t: any) => Number(t) as Tier)
+                  .catch(() => Tier.New)
+              : Promise.resolve(Tier.New),
+          ]);
+          entries[app.freelancer.toLowerCase()] = { profile, tier };
+        })
+      );
+      if (!cancelled) setReputationData(entries);
+    }
+    if (applications.length > 0) fetchReputation();
+    return () => { cancelled = true; };
+  }, [applications, getFreelancerProfile, readContracts.reputation]);
 
   const hasSelection = selectedFreelancer && selectedFreelancer !== "0x0000000000000000000000000000000000000000";
   const now = nowTimestamp ?? Math.floor(Date.now() / 1000);
@@ -267,12 +300,29 @@ export function ApplicationList({
                   <User className="h-4 w-4 text-gray-500" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium font-mono">
-                    {truncateAddress(app.freelancer)}
-                  </p>
-                  <p className="text-xs text-gray-400">
-                    Applied {new Date(app.appliedAt * 1000).toLocaleDateString()}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium font-mono">
+                      {truncateAddress(app.freelancer)}
+                    </p>
+                    {reputationData[app.freelancer.toLowerCase()] && (
+                      <TierBadge tier={reputationData[app.freelancer.toLowerCase()].tier} />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-gray-400">
+                      Applied {new Date(app.appliedAt * 1000).toLocaleDateString()}
+                    </p>
+                    {reputationData[app.freelancer.toLowerCase()]?.profile && (
+                      <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                        <Star className="h-3 w-3 text-yellow-500" />
+                        {Number(
+                          reputationData[app.freelancer.toLowerCase()].profile!.reputationScore
+                        ).toLocaleString()}
+                        <span className="text-gray-300">·</span>
+                        {reputationData[app.freelancer.toLowerCase()].profile!.jobsCompleted} jobs
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 

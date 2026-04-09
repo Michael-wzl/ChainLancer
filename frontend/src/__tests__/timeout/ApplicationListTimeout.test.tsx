@@ -20,8 +20,19 @@ import type { ApplicationData } from "../../hooks/useJobList";
 // Mock dependencies that ApplicationList imports
 vi.mock("../../hooks/useReputation", () => ({
   useReputation: () => ({
+    getFreelancerProfile: vi.fn().mockResolvedValue(null),
     getFreelancerTier: vi.fn(),
     getClientTier: vi.fn(),
+  }),
+}));
+
+vi.mock("../../contexts/ContractContext", () => ({
+  useContracts: () => ({
+    readContracts: {
+      reputation: {
+        getFreelancerTier: vi.fn().mockResolvedValue(0),
+      },
+    },
   }),
 }));
 
