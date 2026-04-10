@@ -50,6 +50,7 @@ async function main() {
   console.log("\nUpgrading...");
   const upgraded = await upgrades.upgradeProxy(proxyAddress, NewImplementation, {
     kind: "uups",
+    unsafeAllow: ["constructor"],
     unsafeAllowLinkedLibraries: true,
   });
   await upgraded.waitForDeployment();
