@@ -261,23 +261,15 @@ export default function PostJob() {
       //    the same CID as the encrypted agreement.
       //    publicSummary is an UNENCRYPTED summary so that anyone browsing
       //    the job can read the agreement details without needing the job key.
+      // FE-2 fix: Only expose minimal metadata in the public summary to
+      // avoid leaking the full agreement in cleartext on IPFS.
       const envelope = {
         version: 1,
         salt: saltHex,
         encrypted: bufferToHex(encryptedBytes),
         publicSummary: {
           title,
-          description,
-          requirements,
-          milestones: milestones.map((ms, i) => ({
-            index: i,
-            description: ms.description,
-            value: ms.value,
-            deadlineDays: ms.deadlineDays,
-          })),
-          reviewTimeout,
-          postedBy: address,
-          timestamp: Date.now(),
+          milestoneCount: milestones.length,
         },
       };
       const envelopeJSON = JSON.stringify(envelope);

@@ -33,6 +33,9 @@ export const T_EVIDENCE = 5 * 24 * 60 * 60;
 /** Key distribution timeout: 2 days */
 export const T_KEY_DISTRIBUTION = 2 * 24 * 60 * 60;
 
+/** Judge assignment timeout: 3 days */
+export const T_JUDGE_ASSIGNMENT = 3 * 24 * 60 * 60;
+
 /** Ruling timeout: 14 days */
 export const T_RULING = 14 * 24 * 60 * 60;
 

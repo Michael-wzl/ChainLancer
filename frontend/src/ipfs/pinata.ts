@@ -4,7 +4,13 @@
  * Uses raw fetch against the Pinata pinning API.
  * Gateway retrieval logic lives in ./gateway.ts.
  *
- * In the demo, the Pinata JWT is embedded in the frontend bundle via env vars.
+ * FE-1 SECURITY WARNING: The Pinata JWT is exposed in the client bundle via
+ * `import.meta.env.VITE_PINATA_JWT`. In a production deployment this MUST be
+ * replaced with a backend proxy or signed-upload-URL pattern so that the
+ * secret never reaches the browser.
+ *
+ * TODO: Implement a backend endpoint (e.g. /api/ipfs/upload) that holds the
+ * Pinata JWT server-side and returns a pre-signed URL or proxies the upload.
  */
 
 const PINATA_JWT = () => import.meta.env.VITE_PINATA_JWT || "";
