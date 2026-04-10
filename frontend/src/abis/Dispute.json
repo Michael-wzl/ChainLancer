@@ -311,6 +311,25 @@
       },
       {
         "indexed": false,
+        "internalType": "enum IDispute.Ruling",
+        "name": "defaultRuling",
+        "type": "uint8"
+      }
+    ],
+    "name": "JudgeAssignmentDefaultTriggered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "disputeId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
         "internalType": "address",
         "name": "nonCooperatingParty",
         "type": "address"
@@ -555,6 +574,19 @@
   },
   {
     "inputs": [],
+    "name": "T_JUDGE_ASSIGNMENT",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "T_KEY_DISTRIBUTION",
     "outputs": [
       {
@@ -651,6 +683,19 @@
       }
     ],
     "name": "changeDefaultAdminDelay",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "disputeId",
+        "type": "uint256"
+      }
+    ],
+    "name": "claimJudgeAssignmentDefault",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -889,6 +934,11 @@
         "internalType": "enum IDispute.DisputePhase",
         "name": "phase",
         "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "judgeAssignmentDeadline",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1025,6 +1075,11 @@
       {
         "internalType": "uint256",
         "name": "evidenceDeadline",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "judgeAssignmentDeadline",
         "type": "uint256"
       },
       {
