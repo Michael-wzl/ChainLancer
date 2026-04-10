@@ -123,6 +123,29 @@ describe("Dispute", function () {
         dispute.connect(client).assignJudge(disputeId, judge.address, ethers.randomBytes(33))
       ).to.be.reverted;
     });
+
+    // ── SC-1: Judge conflict of interest ──
+    it("should reject assigning the client as judge (SC-1)", async function () {
+      const { dispute, platformAdmin, client, disputeId } = await createDisputeFixture();
+
+      await time.increase(5 * ONE_DAY + 1);
+      await dispute.connect(client).closeEvidencePhase(disputeId);
+
+      await expect(
+        dispute.connect(platformAdmin).assignJudge(disputeId, client.address, ethers.randomBytes(33))
+      ).to.be.revertedWith("Judge conflict of interest");
+    });
+
+    it("should reject assigning the freelancer as judge (SC-1)", async function () {
+      const { dispute, platformAdmin, client, freelancer1, disputeId } = await createDisputeFixture();
+
+      await time.increase(5 * ONE_DAY + 1);
+      await dispute.connect(client).closeEvidencePhase(disputeId);
+
+      await expect(
+        dispute.connect(platformAdmin).assignJudge(disputeId, freelancer1.address, ethers.randomBytes(33))
+      ).to.be.revertedWith("Judge conflict of interest");
+    });
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -187,7 +210,7 @@ describe("Dispute", function () {
 
       // Wait for key distribution deadline
       await time.increase(2 * ONE_DAY + 1);
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(freelancer1).claimKeyDefault(disputeId);
 
       const [phase, ruling] = await dispute.getDisputeStatus(disputeId);
       expect(phase).to.equal(4); // Ruled
@@ -200,20 +223,71 @@ describe("Dispute", function () {
       await dispute.connect(client).distributeKeyToJudge(disputeId, ethers.toUtf8Bytes("key"));
 
       await time.increase(2 * ONE_DAY + 1);
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(client).claimKeyDefault(disputeId);
 
       const [phase, ruling] = await dispute.getDisputeStatus(disputeId);
       expect(ruling).to.equal(2); // ClientWins
     });
 
     it("should default to Inconclusive if neither submits key", async function () {
-      const { dispute, disputeId } = await advanceToKeyDistribution();
+      const { dispute, client, disputeId } = await advanceToKeyDistribution();
 
       await time.increase(2 * ONE_DAY + 1);
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(client).claimKeyDefault(disputeId);
 
       const [phase, ruling] = await dispute.getDisputeStatus(disputeId);
       expect(ruling).to.equal(0); // Inconclusive
+    });
+
+    // ── SC-2: claimKeyDefault authorization ──
+    it("should reject claimKeyDefault from unrelated address (SC-2)", async function () {
+      const { dispute, freelancer2, disputeId } = await advanceToKeyDistribution();
+
+      await time.increase(2 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(freelancer2).claimKeyDefault(disputeId)
+      ).to.be.revertedWith("Not authorized");
+    });
+
+    it("should allow client to call claimKeyDefault (SC-2)", async function () {
+      const { dispute, client, disputeId } = await advanceToKeyDistribution();
+
+      await time.increase(2 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(client).claimKeyDefault(disputeId)
+      ).not.to.be.reverted;
+    });
+
+    it("should allow freelancer to call claimKeyDefault (SC-2)", async function () {
+      const { dispute, freelancer1, disputeId } = await advanceToKeyDistribution();
+
+      await time.increase(2 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(freelancer1).claimKeyDefault(disputeId)
+      ).not.to.be.reverted;
+    });
+
+    it("should allow judge to call claimKeyDefault (SC-2)", async function () {
+      const { dispute, judge, disputeId } = await advanceToKeyDistribution();
+
+      await time.increase(2 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(judge).claimKeyDefault(disputeId)
+      ).not.to.be.reverted;
+    });
+
+    it("should allow platform admin to call claimKeyDefault (SC-2)", async function () {
+      const { dispute, platformAdmin, disputeId } = await advanceToKeyDistribution();
+
+      await time.increase(2 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(platformAdmin).claimKeyDefault(disputeId)
+      ).not.to.be.reverted;
     });
   });
 
@@ -299,13 +373,13 @@ describe("Dispute", function () {
     }
 
     it("should default to Inconclusive 50/50 when judge misses ruling deadline", async function () {
-      const { dispute, disputeId } = await advanceToUnderReview();
+      const { dispute, client, disputeId } = await advanceToUnderReview();
 
       // Wait past the ruling deadline (14 days)
       await time.increase(14 * ONE_DAY + 1);
 
       await expect(
-        dispute.claimRulingDefault(disputeId)
+        dispute.connect(client).claimRulingDefault(disputeId)
       ).to.emit(dispute, "RulingDefaultTriggered");
 
       const [phase] = await dispute.getDisputeStatus(disputeId);
@@ -313,37 +387,78 @@ describe("Dispute", function () {
     });
 
     it("should revert if ruling deadline not passed", async function () {
-      const { dispute, disputeId } = await advanceToUnderReview();
+      const { dispute, client, disputeId } = await advanceToUnderReview();
 
       await expect(
-        dispute.claimRulingDefault(disputeId)
+        dispute.connect(client).claimRulingDefault(disputeId)
       ).to.be.revertedWith("Ruling deadline not passed");
     });
 
     it("should revert if not in UnderReview phase", async function () {
-      const { dispute, disputeId } = await createDisputeFixture();
+      const { dispute, client, disputeId } = await createDisputeFixture();
 
       await expect(
-        dispute.claimRulingDefault(disputeId)
+        dispute.connect(client).claimRulingDefault(disputeId)
       ).to.be.revertedWith("Wrong phase");
     });
 
     it("should allow judge reassignment after claimRulingDefault", async function () {
-      const { dispute, platformAdmin, freelancer1, disputeId } = await advanceToUnderReview();
+      const { dispute, platformAdmin, client, freelancer2, disputeId } = await advanceToUnderReview();
 
       await time.increase(14 * ONE_DAY + 1);
-      await dispute.claimRulingDefault(disputeId);
+      await dispute.connect(client).claimRulingDefault(disputeId);
 
       // After claimRulingDefault, dispute is back in AwaitingJudge
       const [phase] = await dispute.getDisputeStatus(disputeId);
       expect(phase).to.equal(1); // AwaitingJudge
 
-      // A new judge can be assigned
-      const newJudge = freelancer1; // reuse for testing purposes
+      // A new judge can be assigned (must not be a party — SC-1)
+      const newJudge = freelancer2;
       await dispute.connect(platformAdmin).assignJudge(disputeId, newJudge.address, ethers.randomBytes(33));
 
       const [phase2] = await dispute.getDisputeStatus(disputeId);
       expect(phase2).to.equal(2); // KeyDistribution
+    });
+
+    // ── SC-2: claimRulingDefault authorization ──
+    it("should reject claimRulingDefault from unrelated address (SC-2)", async function () {
+      const { dispute, freelancer2, disputeId } = await advanceToUnderReview();
+
+      await time.increase(14 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(freelancer2).claimRulingDefault(disputeId)
+      ).to.be.revertedWith("Not authorized");
+    });
+
+    it("should allow freelancer to call claimRulingDefault (SC-2)", async function () {
+      const { dispute, freelancer1, disputeId } = await advanceToUnderReview();
+
+      await time.increase(14 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(freelancer1).claimRulingDefault(disputeId)
+      ).not.to.be.reverted;
+    });
+
+    it("should allow judge to call claimRulingDefault (SC-2)", async function () {
+      const { dispute, judge, disputeId } = await advanceToUnderReview();
+
+      await time.increase(14 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(judge).claimRulingDefault(disputeId)
+      ).not.to.be.reverted;
+    });
+
+    it("should allow platform admin to call claimRulingDefault (SC-2)", async function () {
+      const { dispute, platformAdmin, disputeId } = await advanceToUnderReview();
+
+      await time.increase(14 * ONE_DAY + 1);
+
+      await expect(
+        dispute.connect(platformAdmin).claimRulingDefault(disputeId)
+      ).not.to.be.reverted;
     });
   });
 

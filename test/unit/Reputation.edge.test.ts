@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import {
   deployFullPlatformFixture,
   advanceJobToActive,
@@ -249,6 +249,12 @@ describe("Reputation — Edge Cases & Logic Correctness", function () {
         await reputation.recordJobCompleted(client.address, usdc(3000), 3);
       }
 
+      // SC-4: recordJobCompleted no longer increments totalMilestoneCount;
+      // we must call recordMilestoneResolved per milestone (19 jobs × 3 milestones = 57)
+      for (let i = 0; i < 57; i++) {
+        await reputation.recordMilestoneResolved(client.address);
+      }
+
       // totalValueCompleted = 57000, completionRate = 95%
       // But add many auto-approves: 19 completed jobs * 3 milestones each = 57 total milestones
       // Need >= 10% = 6 auto-approves to block Gold
@@ -269,6 +275,11 @@ describe("Reputation — Edge Cases & Logic Correctness", function () {
       }
       for (let i = 0; i < 19; i++) {
         await reputation.recordJobCompleted(client.address, usdc(3000), 3);
+      }
+
+      // SC-4: recordJobCompleted no longer increments totalMilestoneCount
+      for (let i = 0; i < 57; i++) {
+        await reputation.recordMilestoneResolved(client.address);
       }
 
       // totalValue = 57000, completion = 95%, autoApprove = 0 → Gold
@@ -539,6 +550,56 @@ describe("Reputation — Edge Cases & Logic Correctness", function () {
       // score_dispute = 1000e6 / (1 + 0.3) = 1000e6 / 1.3
       // score_cancel > score_dispute
       expect(scoreCancellation).to.be.gt(scoreDisputeLoss);
+    });
+  });
+
+  // ═══════════════════════════════════════════
+  //   SC-4: totalMilestoneCount PER-MILESTONE
+  // ═══════════════════════════════════════════
+
+  describe("SC-4: totalMilestoneCount per-milestone increment", function () {
+    it("should increment client totalMilestoneCount per approved milestone", async function () {
+      const fixture = await loadFixture(deployFullPlatformFixture);
+      const { jobEscrow, usdc: usdcContract, client, freelancer1, reputation } = fixture;
+
+      const { jobId } = await advanceJobToActive(jobEscrow, usdcContract as any, client, freelancer1);
+
+      // Approve milestone 0
+      await jobEscrow.connect(freelancer1).submitMilestone(
+        jobId, 0, ethers.keccak256(ethers.toUtf8Bytes("work0")), "QmCID0"
+      );
+      await jobEscrow.connect(client).approveMilestone(jobId, 0);
+
+      const profile1 = await reputation.clientProfiles(client.address);
+      expect(profile1.totalMilestoneCount).to.equal(1);
+
+      // Approve milestone 1
+      await jobEscrow.connect(freelancer1).submitMilestone(
+        jobId, 1, ethers.keccak256(ethers.toUtf8Bytes("work1")), "QmCID1"
+      );
+      await jobEscrow.connect(client).approveMilestone(jobId, 1);
+
+      // Should be 2 (1 per milestone, NOT double-counted by recordJobCompleted)
+      const profile2 = await reputation.clientProfiles(client.address);
+      expect(profile2.totalMilestoneCount).to.equal(2);
+    });
+
+    it("should increment client totalMilestoneCount on auto-approve", async function () {
+      const fixture = await loadFixture(deployFullPlatformFixture);
+      const { jobEscrow, usdc: usdcContract, client, freelancer1, reputation } = fixture;
+      const SEVEN_DAYS = 7 * ONE_DAY;
+
+      const { jobId } = await advanceJobToActive(jobEscrow, usdcContract as any, client, freelancer1);
+
+      // Submit and wait for auto-approve
+      await jobEscrow.connect(freelancer1).submitMilestone(
+        jobId, 0, ethers.keccak256(ethers.toUtf8Bytes("work0")), "QmCID0"
+      );
+      await time.increase(SEVEN_DAYS + 1);
+      await jobEscrow.triggerAutoApprove(jobId, 0);
+
+      const profile = await reputation.clientProfiles(client.address);
+      expect(profile.totalMilestoneCount).to.equal(1);
     });
   });
 });

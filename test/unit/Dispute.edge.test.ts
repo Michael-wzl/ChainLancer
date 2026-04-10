@@ -309,7 +309,7 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
       // Wait for deadline to pass
       await time.increase(2 * ONE_DAY + 1);
 
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(freelancer1).claimKeyDefault(disputeId);
 
       const status = await dispute.getDisputeStatus(disputeId);
       expect(status.phase).to.equal(4); // Ruled
@@ -329,7 +329,7 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
 
       await time.increase(2 * ONE_DAY + 1);
 
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(client).claimKeyDefault(disputeId);
 
       const status = await dispute.getDisputeStatus(disputeId);
       expect(status.ruling).to.equal(2); // ClientWins
@@ -340,12 +340,12 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
     });
 
     it("should default to Inconclusive (50/50) if both fail to submit keys", async function () {
-      const { dispute, disputeId } = await loadFixture(advanceToKeyDistribution);
+      const { dispute, client, disputeId } = await loadFixture(advanceToKeyDistribution);
 
       // Neither party submits key
       await time.increase(2 * ONE_DAY + 1);
 
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(client).claimKeyDefault(disputeId);
 
       const status = await dispute.getDisputeStatus(disputeId);
       expect(status.ruling).to.equal(0); // Inconclusive
@@ -356,9 +356,9 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
     });
 
     it("should reject claimKeyDefault before deadline passes", async function () {
-      const { dispute, disputeId } = await loadFixture(advanceToKeyDistribution);
+      const { dispute, client, disputeId } = await loadFixture(advanceToKeyDistribution);
 
-      await expect(dispute.claimKeyDefault(disputeId)).to.be.revertedWith("Deadline not passed");
+      await expect(dispute.connect(client).claimKeyDefault(disputeId)).to.be.revertedWith("Deadline not passed");
     });
   });
 
@@ -421,12 +421,49 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
       ).to.be.revertedWith("Deposit slash exceeds 50%");
     });
 
-    it("should accept Inconclusive ruling with any valid freelancerShareBps", async function () {
+    it("should accept Inconclusive ruling with balanced freelancerShareBps (SC-6)", async function () {
       const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
 
       const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
       await expect(
         dispute.connect(judge).submitRuling(disputeId, 0, reasoningHash, 5000, 0) // 50/50
+      ).to.emit(dispute, "RulingSubmitted");
+    });
+
+    // ── SC-6: Inconclusive ruling balanced range ──
+    it("should reject Inconclusive ruling with freelancerShareBps < 3000 (SC-6)", async function () {
+      const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
+
+      const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
+      await expect(
+        dispute.connect(judge).submitRuling(disputeId, 0, reasoningHash, 2999, 0)
+      ).to.be.revertedWith("Inconclusive must be balanced");
+    });
+
+    it("should reject Inconclusive ruling with freelancerShareBps > 7000 (SC-6)", async function () {
+      const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
+
+      const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
+      await expect(
+        dispute.connect(judge).submitRuling(disputeId, 0, reasoningHash, 7001, 0)
+      ).to.be.revertedWith("Inconclusive must be balanced");
+    });
+
+    it("should accept Inconclusive ruling at boundary 3000 (SC-6)", async function () {
+      const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
+
+      const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
+      await expect(
+        dispute.connect(judge).submitRuling(disputeId, 0, reasoningHash, 3000, 0)
+      ).to.emit(dispute, "RulingSubmitted");
+    });
+
+    it("should accept Inconclusive ruling at boundary 7000 (SC-6)", async function () {
+      const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
+
+      const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes("reasoning"));
+      await expect(
+        dispute.connect(judge).submitRuling(disputeId, 0, reasoningHash, 7000, 0)
       ).to.emit(dispute, "RulingSubmitted");
     });
 
@@ -494,11 +531,11 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
     }
 
     it("should set Inconclusive 50/50 when judge fails to rule in time", async function () {
-      const { dispute, disputeId } = await loadFixture(advanceToUnderReview);
+      const { dispute, client, disputeId } = await loadFixture(advanceToUnderReview);
 
       await time.increase(14 * ONE_DAY + 1);
 
-      await expect(dispute.claimRulingDefault(disputeId))
+      await expect(dispute.connect(client).claimRulingDefault(disputeId))
         .to.emit(dispute, "RulingDefaultTriggered");
 
       const status = await dispute.getDisputeStatus(disputeId);
@@ -506,7 +543,7 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
     });
 
     it("should revoke PLATFORM_JUDGE role from delinquent judge", async function () {
-      const { dispute, judge, disputeId } = await loadFixture(advanceToUnderReview);
+      const { dispute, client, judge, disputeId } = await loadFixture(advanceToUnderReview);
 
       const PLATFORM_JUDGE = ethers.keccak256(ethers.toUtf8Bytes("PLATFORM_JUDGE"));
 
@@ -514,33 +551,33 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
       expect(await dispute.hasRole(PLATFORM_JUDGE, judge.address)).to.be.true;
 
       await time.increase(14 * ONE_DAY + 1);
-      await dispute.claimRulingDefault(disputeId);
+      await dispute.connect(client).claimRulingDefault(disputeId);
 
       // Judge should lose role
       expect(await dispute.hasRole(PLATFORM_JUDGE, judge.address)).to.be.false;
     });
 
     it("should reject claimRulingDefault before deadline", async function () {
-      const { dispute, disputeId } = await loadFixture(advanceToUnderReview);
+      const { dispute, client, disputeId } = await loadFixture(advanceToUnderReview);
 
-      await expect(dispute.claimRulingDefault(disputeId)).to.be.revertedWith(
+      await expect(dispute.connect(client).claimRulingDefault(disputeId)).to.be.revertedWith(
         "Ruling deadline not passed"
       );
     });
 
     it("should allow judge reassignment after ruling default", async function () {
-      const { dispute, platformAdmin, freelancer1, disputeId } =
+      const { dispute, platformAdmin, freelancer2, client, disputeId } =
         await loadFixture(advanceToUnderReview);
 
       await time.increase(14 * ONE_DAY + 1);
-      await dispute.claimRulingDefault(disputeId);
+      await dispute.connect(client).claimRulingDefault(disputeId);
 
       // After default, dispute is back in AwaitingJudge
       const status = await dispute.getDisputeStatus(disputeId);
       expect(status.phase).to.equal(1); // AwaitingJudge
 
-      // A new judge can be assigned
-      await dispute.connect(platformAdmin).assignJudge(disputeId, freelancer1.address, ethers.randomBytes(33));
+      // A new judge can be assigned (must not be a party — SC-1)
+      await dispute.connect(platformAdmin).assignJudge(disputeId, freelancer2.address, ethers.randomBytes(33));
       const status2 = await dispute.getDisputeStatus(disputeId);
       expect(status2.phase).to.equal(2); // KeyDistribution
     });
@@ -656,7 +693,7 @@ describe("Dispute — Edge Cases & Logic Correctness", function () {
 
       // Let key distribution expire
       await time.increase(2 * ONE_DAY + 1);
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(client).claimKeyDefault(disputeId);
 
       // Try to assign another judge
       const newJudge = freelancer1; // just for testing

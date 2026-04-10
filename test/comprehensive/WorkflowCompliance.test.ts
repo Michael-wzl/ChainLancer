@@ -623,7 +623,7 @@ describe("§2.6 Cancellation Rules", function () {
   });
 
   describe("APPLICATIONS state — client cancel after freelancer selected", function () {
-    it("should charge client minor reputation penalty when cancelling after selection", async function () {
+    it("should NOT charge reputation penalty when cancelling after offer has expired (SC-7)", async function () {
       const { jobEscrow, reputation, client, freelancer1 } = await loadFixture(deployFullPlatformFixture);
       const { jobId } = await createDefaultJob(jobEscrow, client);
 
@@ -633,11 +633,11 @@ describe("§2.6 Cancellation Rules", function () {
       // Must wait for T_STAKE to expire before cancellation is allowed
       await time.increase(THREE_DAYS + 1);
 
-      // Now cancel — should incur reputation penalty
+      // Now cancel — SC-7: offer expired so no reputation penalty
       await jobEscrow.connect(client).cancelJob(jobId);
 
       const clientProfile = await reputation.getClientProfile(client.address);
-      expect(clientProfile.jobsCancelledAfterSelection).to.equal(1);
+      expect(clientProfile.jobsCancelledAfterSelection).to.equal(0);
     });
   });
 
@@ -933,7 +933,7 @@ describe("§3 Dispute Path — Centralized Resolution", function () {
       await time.increase(2 * ONE_DAY + 1);
 
       // Claim key default — client didn't cooperate, so FreelancerWins
-      await dispute.claimKeyDefault(disputeId);
+      await dispute.connect(freelancer1).claimKeyDefault(disputeId);
 
       const dStatus = await dispute.getDisputeStatus(disputeId);
       expect(dStatus.phase).to.equal(4); // Ruled

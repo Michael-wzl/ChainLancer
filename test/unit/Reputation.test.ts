@@ -219,6 +219,12 @@ describe("Reputation", function () {
       await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
       await reputation.connect(escrowSigner).recordJobCompleted(client.address, usdc(25000), 3);
 
+      // SC-4: recordJobCompleted no longer increments totalMilestoneCount;
+      // we must call recordMilestoneResolved per milestone (2 jobs × 3 milestones = 6)
+      for (let i = 0; i < 6; i++) {
+        await reputation.connect(escrowSigner).recordMilestoneResolved(client.address);
+      }
+
       // autoApproveRate = autoApproveCount * 100 / totalMilestoneCount
       // With 2 completed jobs, milestoneCount=3 each → totalMilestones = 6
       // Need autoApproveRate >= 10 → autoApproveCount * 100 / 6 >= 10 → autoApproveCount >= 1

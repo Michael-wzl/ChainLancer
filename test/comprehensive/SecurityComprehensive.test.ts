@@ -616,7 +616,7 @@ describe("Security: Dispute System Manipulation", function () {
     await time.increase(14 * ONE_DAY + 1);
 
     // Claim ruling default — should reset to AwaitingJudge
-    await dispute.claimRulingDefault(disputeId);
+    await dispute.connect(client).claimRulingDefault(disputeId);
 
     const dStatus = await dispute.getDisputeStatus(disputeId);
     expect(dStatus.phase).to.equal(1); // AwaitingJudge

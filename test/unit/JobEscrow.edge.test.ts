@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import {
   deployFullPlatformFixture,
@@ -458,7 +458,7 @@ describe("JobEscrow — Edge Cases & Logic Correctness", function () {
       ).to.be.revertedWithCustomError(jobEscrow, "OnlyCounterparty");
     });
 
-    it("should track cancellation reputation penalty for client when freelancer is selected", async function () {
+    it("should NOT track cancellation reputation penalty for client when offer has expired (SC-7)", async function () {
       const { jobEscrow, client, freelancer1, reputation } =
         await loadFixture(deployFullPlatformFixture);
 
@@ -472,11 +472,11 @@ describe("JobEscrow — Edge Cases & Logic Correctness", function () {
       // Must wait for T_STAKE to expire before cancellation is allowed
       await time.increase(THREE_DAYS + 1);
 
-      // Cancel when freelancer is selected → reputation penalty
+      // Cancel when freelancer offer has expired → SC-7: no reputation penalty
       await jobEscrow.connect(client).cancelJob(jobId);
 
       const profile = await reputation.getClientProfile(client.address);
-      expect(profile.jobsCancelledAfterSelection).to.equal(1);
+      expect(profile.jobsCancelledAfterSelection).to.equal(0);
     });
 
     it("should not track cancellation reputation penalty when no freelancer is selected", async function () {
@@ -804,6 +804,51 @@ describe("JobEscrow — Edge Cases & Logic Correctness", function () {
           .connect(client)
           .postJob(hash, [usdc(1000)], [now + 60 * ONE_DAY], SEVEN_DAYS, "QmCID")
       ).to.emit(jobEscrow, "JobPosted");
+    });
+  });
+
+  // ═══════════════════════════════════════════
+  //  SC-5: _DISPUTE ZERO-ADDRESS IN INITIALIZE
+  // ═══════════════════════════════════════════
+
+  describe("SC-5: _dispute zero-address in initialize()", function () {
+    it("should revert when _dispute is zero address", async function () {
+      const [deployer, , , , , treasury] = await ethers.getSigners();
+
+      const MockUSDC = await ethers.getContractFactory("MockUSDC");
+      const usdc_token = await MockUSDC.deploy();
+
+      const DataAvailability = await ethers.getContractFactory("DataAvailability");
+      const da = await upgrades.deployProxy(DataAvailability, [deployer.address, 0], { kind: "uups" });
+      await da.waitForDeployment();
+
+      const ReputationFactory = await ethers.getContractFactory("Reputation");
+      const rep = await upgrades.deployProxy(ReputationFactory, [deployer.address, 0], { kind: "uups" });
+      await rep.waitForDeployment();
+
+      const JobEscrowLib = await ethers.getContractFactory("JobEscrowLib");
+      const lib = await JobEscrowLib.deploy();
+      await lib.waitForDeployment();
+
+      const JobEscrowFactory = await ethers.getContractFactory("JobEscrow", {
+        libraries: { JobEscrowLib: await lib.getAddress() },
+      });
+
+      await expect(
+        upgrades.deployProxy(
+          JobEscrowFactory,
+          [
+            await usdc_token.getAddress(),
+            ethers.ZeroAddress,  // _dispute = zero address
+            await rep.getAddress(),
+            await da.getAddress(),
+            treasury.address,
+            deployer.address,
+            0,
+          ],
+          { kind: "uups", unsafeAllow: ["constructor"], unsafeAllowLinkedLibraries: true }
+        )
+      ).to.be.revertedWithCustomError(JobEscrowFactory, "ZeroAddress");
     });
   });
 });
