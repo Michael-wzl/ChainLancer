@@ -38,6 +38,10 @@ interface IReputation {
     /// @param client The client's address
     function recordClientAutoApprove(address client) external;
 
+    /// @notice Increment totalMilestoneCount for a client (called per milestone resolution)
+    /// @param client The client's address
+    function recordMilestoneResolved(address client) external;
+
     /// @notice Record a job completion for a client
     /// @param client The client's address
     /// @param totalValue Total job value

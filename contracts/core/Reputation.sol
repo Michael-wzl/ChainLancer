@@ -81,6 +81,12 @@ contract Reputation is IReputation, AccessControlDefaultAdminRulesUpgradeable, U
         _recalculateFreelancerScore(freelancer);
     }
 
+    /// @notice Increment totalMilestoneCount for a client (called per milestone resolution)
+    /// @dev SC-4: Fixes under-counting by incrementing per-milestone instead of bulk on job completion
+    function recordMilestoneResolved(address client) external onlyRole(PlatformRoles.ESCROW_ROLE) {
+        clientProfiles[client].totalMilestoneCount += 1;
+    }
+
     /// @inheritdoc IReputation
     function recordFreelancerDisputeLoss(address freelancer)
         external override onlyRole(PlatformRoles.ESCROW_ROLE)
@@ -116,11 +122,12 @@ contract Reputation is IReputation, AccessControlDefaultAdminRulesUpgradeable, U
     }
 
     /// @inheritdoc IReputation
-    function recordJobCompleted(address client, uint256 totalValue, uint256 milestoneCount) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
+    /// @dev SC-4: milestoneCount param retained for interface compatibility but no longer used here.
+    ///      totalMilestoneCount is now incremented per-milestone via recordMilestoneResolved().
+    function recordJobCompleted(address client, uint256 totalValue, uint256 /* milestoneCount */) external override onlyRole(PlatformRoles.ESCROW_ROLE) {
         ClientProfile storage cp = clientProfiles[client];
         cp.jobsCompleted += 1;
         cp.totalValueCompleted += totalValue;
-        cp.totalMilestoneCount += milestoneCount;
         _recalculateClientScore(client);
     }
 

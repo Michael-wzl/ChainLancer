@@ -18,6 +18,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
     uint256 public constant T_EVIDENCE = 5 days;
     uint256 public constant T_KEY_DISTRIBUTION = 2 days;
     uint256 public constant T_RULING = 14 days;
+    uint256 public constant T_JUDGE_ASSIGNMENT = 3 days;
     uint256 public constant KEY_DEFAULT_SLASH_BPS = 5000;
     uint256 public constant MAX_EVIDENCE_PER_PARTY = 20;
 
@@ -46,6 +47,8 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         uint256 freelancerShareBps;
         uint256 depositSlashBps;
         DisputePhase phase;
+        // ── Added after initial deployment (must stay at end for UUPS compatibility) ──
+        uint256 judgeAssignmentDeadline;
     }
 
     struct Evidence {
@@ -70,6 +73,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
     event RulingExecuted(uint256 indexed disputeId, Ruling ruling);
     event EvidencePhaseClosed(uint256 indexed disputeId);
     event RulingDefaultTriggered(uint256 indexed disputeId, address indexed judge);
+    event JudgeAssignmentDefaultTriggered(uint256 indexed disputeId, Ruling defaultRuling);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -125,6 +129,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
             judge: address(0),
             ephemeralPubKey: "",
             evidenceDeadline: block.timestamp + T_EVIDENCE,
+            judgeAssignmentDeadline: 0,
             keyDistributionDeadline: 0,
             rulingDeadline: 0,
             clientKeySubmitted: false,
@@ -190,6 +195,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         );
 
         d.phase = DisputePhase.AwaitingJudge;
+        d.judgeAssignmentDeadline = block.timestamp + T_JUDGE_ASSIGNMENT;
 
         emit EvidencePhaseClosed(disputeId);
     }
@@ -206,6 +212,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.AwaitingJudge, "Wrong phase");
         require(judge != address(0), "Invalid judge");
+        require(judge != d.client && judge != d.freelancer, "Judge conflict of interest");
         require(ephemeralPubKey.length == 33, "Invalid ephemeral key length");
 
         d.judge = judge;
@@ -259,6 +266,11 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.KeyDistribution, "Wrong phase");
         require(block.timestamp > d.keyDistributionDeadline, "Deadline not passed");
+        require(
+            msg.sender == d.client || msg.sender == d.freelancer ||
+            msg.sender == d.judge || hasRole(PlatformRoles.PLATFORM_ADMIN, msg.sender),
+            "Not authorized"
+        );
 
         Ruling defaultRuling;
         address nonCooperator;
@@ -293,6 +305,29 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         emit KeyDefaultTriggered(disputeId, nonCooperator, defaultRuling);
     }
 
+    /// @notice Claim a default Inconclusive ruling when admin fails to assign a judge within T_JUDGE_ASSIGNMENT.
+    ///         Anyone (client, freelancer, or admin) may call once the deadline has passed.
+    /// @param disputeId The dispute ID
+    function claimJudgeAssignmentDefault(uint256 disputeId) external {
+        DisputeData storage d = disputes[disputeId];
+        require(d.phase == DisputePhase.AwaitingJudge, "Wrong phase");
+        require(d.judgeAssignmentDeadline > 0, "Deadline not set");
+        require(block.timestamp > d.judgeAssignmentDeadline, "Judge assignment deadline not passed");
+        require(
+            msg.sender == d.client || msg.sender == d.freelancer ||
+            hasRole(PlatformRoles.PLATFORM_ADMIN, msg.sender),
+            "Not authorized"
+        );
+
+        // Default to Inconclusive with 50/50 split, no deposit slash
+        d.ruling = Ruling.Inconclusive;
+        d.freelancerShareBps = 5000;
+        d.depositSlashBps = 0;
+        d.phase = DisputePhase.Ruled;
+
+        emit JudgeAssignmentDefaultTriggered(disputeId, Ruling.Inconclusive);
+    }
+
     /// @notice Judge submits their ruling
     /// @param disputeId The dispute ID
     /// @param ruling The ruling (Inconclusive, FreelancerWins, ClientWins)
@@ -321,6 +356,11 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         } else {
             // Inconclusive: depositSlashBps must be 0 (no party is at fault)
             require(depositSlashBps == 0, "Inconclusive must not slash deposit");
+            // SC-6: Enforce balanced range for Inconclusive ruling
+            require(
+                freelancerShareBps >= 3000 && freelancerShareBps <= 7000,
+                "Inconclusive must be balanced"
+            );
         }
 
         d.ruling = ruling;
@@ -340,6 +380,11 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
         DisputeData storage d = disputes[disputeId];
         require(d.phase == DisputePhase.UnderReview, "Wrong phase");
         require(block.timestamp > d.rulingDeadline, "Ruling deadline not passed");
+        require(
+            msg.sender == d.client || msg.sender == d.freelancer ||
+            msg.sender == d.judge || hasRole(PlatformRoles.PLATFORM_ADMIN, msg.sender),
+            "Not authorized"
+        );
 
         // Save judge address before clearing
         address failedJudge = d.judge;
@@ -357,6 +402,7 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
 
         // Return to AwaitingJudge for reassignment
         d.phase = DisputePhase.AwaitingJudge;
+        d.judgeAssignmentDeadline = block.timestamp + T_JUDGE_ASSIGNMENT;
 
         emit RulingDefaultTriggered(disputeId, failedJudge);
     }
@@ -447,10 +493,11 @@ contract Dispute is IDispute, AccessControlDefaultAdminRulesUpgradeable, Reentra
     /// @notice Get dispute deadlines
     function getDisputeDeadlines(uint256 disputeId) external view returns (
         uint256 evidenceDeadline,
+        uint256 judgeAssignmentDeadline,
         uint256 keyDistributionDeadline,
         uint256 rulingDeadline
     ) {
         DisputeData storage d = disputes[disputeId];
-        return (d.evidenceDeadline, d.keyDistributionDeadline, d.rulingDeadline);
+        return (d.evidenceDeadline, d.judgeAssignmentDeadline, d.keyDistributionDeadline, d.rulingDeadline);
     }
 }

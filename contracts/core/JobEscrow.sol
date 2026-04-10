@@ -204,6 +204,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessCo
         uint48 adminTransferDelay
     ) external initializer {
         if (_usdc == address(0)) revert ZeroAddress();
+        if (_dispute == address(0)) revert ZeroAddress();
         if (_reputation == address(0)) revert ZeroAddress();
         if (_dataAvailability == address(0)) revert ZeroAddress();
         if (_treasury == address(0)) revert ZeroAddress();
@@ -486,6 +487,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessCo
 
         // ── INTERACTIONS ──
         reputation.recordMilestoneCompletion(job.freelancer, ms.value, false, false);
+        reputation.recordMilestoneResolved(job.client); // SC-4: per-milestone client count
         _checkAndFinalizeJob(jobId);
 
         emit MilestoneApproved(jobId, milestoneIdx, block.timestamp);
@@ -513,6 +515,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessCo
         // ── INTERACTIONS ──
         reputation.recordMilestoneCompletion(job.freelancer, ms.value, false, false);
         reputation.recordClientAutoApprove(job.client);
+        reputation.recordMilestoneResolved(job.client); // SC-4: per-milestone client count
         _checkAndFinalizeJob(jobId);
 
         emit MilestoneAutoApproved(jobId, milestoneIdx, msg.sender);
@@ -619,10 +622,9 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessCo
         withdrawableBalances[job.client] += job.totalValue;
         _refundBehaviorBond(jobId);
 
-        // Reputation penalty if freelancer was selected
-        if (job.freelancer != address(0)) {
-            reputation.recordClientCancellation(job.client);
-        }
+        // SC-7: No reputation penalty when cancelling after offer expired.
+        // If we reach this point with freelancer != address(0), the offer has necessarily expired
+        // (otherwise CancelWhileOffer would have reverted above). So no penalty applies.
 
         // Set retention expiry
         dataAvailability.setRetentionExpiry(jobId, block.timestamp + 21 days);
@@ -837,6 +839,7 @@ contract JobEscrow is IJobEscrow, ReentrancyGuard, PausableUpgradeable, AccessCo
             reputation.recordMilestoneCompletion(job.freelancer, ms.value, true, false);
             reputation.recordFreelancerDisputeLoss(job.freelancer);
         }
+        reputation.recordMilestoneResolved(job.client); // SC-4: per-milestone client count
 
         _checkAndFinalizeJob(jobId);
 
