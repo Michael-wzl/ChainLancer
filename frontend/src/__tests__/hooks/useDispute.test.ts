@@ -304,6 +304,7 @@ describe("hooks/useDispute", () => {
     it("should return deadline timestamps", async () => {
       mockReadContracts.dispute.getDisputeDeadlines.mockResolvedValueOnce([
         1700000000n, // evidence
+        1700050000n, // judge assignment
         1700100000n, // key distribution
         1700200000n, // ruling
       ]);
@@ -316,6 +317,7 @@ describe("hooks/useDispute", () => {
       });
 
       expect(deadlines.evidenceDeadline).toBe(1700000000);
+      expect(deadlines.judgeAssignmentDeadline).toBe(1700050000);
       expect(deadlines.keyDistributionDeadline).toBe(1700100000);
       expect(deadlines.rulingDeadline).toBe(1700200000);
     });

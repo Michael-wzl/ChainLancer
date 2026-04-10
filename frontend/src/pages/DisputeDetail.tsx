@@ -33,6 +33,7 @@ interface DisputeInfo {
   judge: string;
   ephemeralPubKey: string;
   evidenceDeadline: number;
+  judgeAssignmentDeadline: number;
   keyDistributionDeadline: number;
   rulingDeadline: number;
   clientKeySubmitted: boolean;
@@ -124,6 +125,7 @@ export default function DisputeDetail() {
         judge: info.judge,
         ephemeralPubKey: info.ephemeralPubKey,
         evidenceDeadline: Number(info.evidenceDeadline),
+        judgeAssignmentDeadline: Number(info.judgeAssignmentDeadline),
         keyDistributionDeadline: Number(info.keyDistributionDeadline),
         rulingDeadline: Number(info.rulingDeadline),
         clientKeySubmitted: info.clientKeySubmitted,
@@ -184,11 +186,25 @@ export default function DisputeDetail() {
         return;
       }
 
-      // Upload to IPFS only after dry-run passes
-      const cid = await uploadJSON(
-        evidenceDoc,
-        `evidence-${jobId}-${milestoneIdx}-${Date.now()}`
-      );
+      // FE-4 fix: Encrypt evidence with the job key before uploading to IPFS
+      // so that dispute evidence is not stored as plaintext.
+      const jobKey = getJobKey(Number(jobId), address);
+      let cid: string;
+      if (jobKey) {
+        const { encrypt } = await import("../crypto/aes");
+        const { bufferToHex } = await import("../crypto/jobKey");
+        const { uploadFile } = await import("../ipfs/pinata");
+        const plainBytes = new TextEncoder().encode(JSON.stringify(evidenceDoc));
+        const encryptedBytes = await encrypt(new TextDecoder().decode(plainBytes), jobKey);
+        const blob = new Blob([encryptedBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
+        cid = await uploadFile(blob, `evidence-${jobId}-${milestoneIdx}-${Date.now()}`);
+      } else {
+        // Fallback: upload as JSON if no key available (should not normally happen)
+        cid = await uploadJSON(
+          evidenceDoc,
+          `evidence-${jobId}-${milestoneIdx}-${Date.now()}`
+        );
+      }
 
       const tx = await contracts.dispute.submitEvidence(disputeId, evidenceHash, cid);
       toast.loading("Submitting evidence...", { id: "evidence" });
@@ -204,7 +220,7 @@ export default function DisputeDetail() {
   };
 
   // Hooks
-  const { closeEvidencePhase, claimRulingDefault, executeRuling: execRuling, loading: disputeHookLoading } = useDispute();
+  const { closeEvidencePhase, claimJudgeAssignmentDefault, claimRulingDefault, executeRuling: execRuling, loading: disputeHookLoading } = useDispute();
 
   if (jobLoading || loading) {
     return (
@@ -320,7 +336,12 @@ export default function DisputeDetail() {
 
       {/* Evidence */}
       <div className="card">
-        <EvidenceList evidences={evidenceList} currentUser={address ?? undefined} isAuthorized={isAuthorizedViewer} />
+        <EvidenceList
+          evidences={evidenceList}
+          currentUser={address ?? undefined}
+          isAuthorized={isAuthorizedViewer}
+          jobKeyHex={jobId !== null && address ? getJobKey(Number(jobId), address) : null}
+        />
       </div>
 
       {/* Submit evidence (during evidence phase) */}
@@ -407,6 +428,51 @@ export default function DisputeDetail() {
           />
         </div>
       )}
+
+      {/* Judge Assignment deadline countdown (during AwaitingJudge phase) */}
+      {dispute.phase === DisputePhase.AwaitingJudge && dispute.judgeAssignmentDeadline > 0 && (
+        <div className="card">
+          <CountdownTimer
+            targetTimestamp={dispute.judgeAssignmentDeadline}
+            label="Judge assignment deadline"
+            expiredLabel="Judge assignment deadline expired — Inconclusive ruling can be claimed"
+          />
+        </div>
+      )}
+
+      {/* Claim Judge Assignment Default (when admin missed the 3-day assignment deadline) */}
+      {dispute.phase === DisputePhase.AwaitingJudge &&
+        dispute.judgeAssignmentDeadline > 0 &&
+        blockNow > dispute.judgeAssignmentDeadline &&
+        (isClient || isFreelancer || isAdmin) && (
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              <p className="text-sm text-orange-700 font-medium">
+                The admin has not assigned a judge within the 3-day deadline.
+                An Inconclusive ruling (50/50 split) will be applied.
+              </p>
+            </div>
+            <TransactionButton
+              onClick={async () => {
+                if (disputeId === null) return;
+                setTxLoading(true);
+                try {
+                  await claimJudgeAssignmentDefault(disputeId);
+                  fetchDispute();
+                } catch {
+                  // Error toasted by hook
+                } finally {
+                  setTxLoading(false);
+                }
+              }}
+              isLoading={txLoading}
+              variant="danger"
+            >
+              <AlertTriangle className="mr-1.5 h-4 w-4" /> Claim Judge Assignment Default
+            </TransactionButton>
+          </div>
+        )}
 
       {/* Key distribution (using extracted component) */}
       {dispute.phase === DisputePhase.KeyDistribution && disputeId !== null && jobId !== null && (

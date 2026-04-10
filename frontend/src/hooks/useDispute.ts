@@ -29,6 +29,7 @@ export interface DisputeDetails {
 
 export interface DisputeDeadlines {
   evidenceDeadline: number;
+  judgeAssignmentDeadline: number;
   keyDistributionDeadline: number;
   rulingDeadline: number;
 }
@@ -127,6 +128,18 @@ export function useDispute() {
     [contracts.dispute, execute]
   );
 
+  const claimJudgeAssignmentDefault = useCallback(
+    async (disputeId: number) => {
+      if (!contracts.dispute) throw new Error("Contract not ready");
+      return execute(
+        () => contracts.dispute!.claimJudgeAssignmentDefault(disputeId),
+        "Judge assignment timeout — Inconclusive ruling applied!",
+        "judge-assignment-default"
+      );
+    },
+    [contracts.dispute, execute]
+  );
+
   const submitRuling = useCallback(
     async (
       disputeId: number,
@@ -220,8 +233,9 @@ export function useDispute() {
         const deadlines = await readContracts.dispute.getDisputeDeadlines(disputeId);
         return {
           evidenceDeadline: Number(deadlines[0]),
-          keyDistributionDeadline: Number(deadlines[1]),
-          rulingDeadline: Number(deadlines[2]),
+          judgeAssignmentDeadline: Number(deadlines[1]),
+          keyDistributionDeadline: Number(deadlines[2]),
+          rulingDeadline: Number(deadlines[3]),
         };
       } catch (err) {
         console.error("Failed to fetch dispute deadlines:", err);
@@ -304,6 +318,7 @@ export function useDispute() {
     closeEvidencePhase,
     distributeKeyToJudge,
     claimKeyDefault,
+    claimJudgeAssignmentDefault,
     claimRulingDefault,
     submitRuling,
     executeRuling,

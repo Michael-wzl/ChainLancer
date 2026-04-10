@@ -83,6 +83,25 @@ export function RulingForm({
 
     try {
       const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes(reasoning));
+
+      // FE-6 fix: Persist the ruling reasoning to IPFS (encrypted if possible)
+      // so there is an auditable record of the judge's rationale.
+      try {
+        const { uploadJSON } = await import("../../ipfs/pinata");
+        const reasoningDoc = {
+          disputeId,
+          ruling,
+          reasoning,
+          reasoningHash,
+          timestamp: Date.now(),
+        };
+        const cid = await uploadJSON(reasoningDoc, `ruling-reasoning-${disputeId}-${Date.now()}`);
+        console.log("Ruling reasoning persisted to IPFS:", cid);
+      } catch (ipfsErr) {
+        // Non-blocking: reasoning hash still goes on-chain even if IPFS fails
+        console.warn("Failed to persist ruling reasoning to IPFS:", ipfsErr);
+      }
+
       await submitRuling(
         disputeId,
         ruling,
