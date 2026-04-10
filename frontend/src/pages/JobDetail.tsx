@@ -35,6 +35,7 @@ import { getJobKey, storeJobKey } from "../utils/storage";
 import { getJobTitle, storeJobTitle } from "../utils/storage";
 import { decrypt } from "../crypto/aes";
 import { hexToBuffer } from "../crypto/jobKey";
+import { computeAgreementHash } from "../crypto/hash";
 import { encryptForRecipient, decryptWithPrivateKey, hexToEncryptedKey } from "../crypto/keyExchange";
 import { JobState, MilestoneStatus, DisputePhase, T_ACCEPTANCE, T_STAKE, FREELANCER_DEPOSIT_BPS, Tier } from "../config/constants";
 import { useReputation } from "../hooks/useReputation";
@@ -191,6 +192,24 @@ export default function JobDetail() {
 
       if (effectiveKey && encrypted) {
         const plaintext = await decrypt(encrypted, effectiveKey);
+
+        // FE-5 fix: Verify agreement hash after decryption to detect tampering
+        if (envelopeContent?.salt && job?.agreementHash) {
+          const recomputedHash = computeAgreementHash(
+            envelopeContent.salt as string,
+            plaintext,
+          );
+          if (recomputedHash !== job.agreementHash) {
+            console.warn("Agreement hash mismatch!", { recomputedHash, onChain: job.agreementHash });
+            setAgreementError(
+              "⚠️ Agreement integrity check FAILED — the decrypted content does not match the on-chain hash. " +
+              "This agreement may have been tampered with."
+            );
+            setAgreementLoading(false);
+            return;
+          }
+        }
+
         setAgreementText(plaintext);
         // Bug #4 fix: cache the title from the decrypted agreement
         try {
@@ -414,19 +433,50 @@ export default function JobDetail() {
         </div>
       </div>
 
-      {/* BUG-004 fix: Cancellation status banner */}
+      {/* BUG-004 / FE-3 fix: Cancellation status banner with explanation and Decline option */}
       {job.state === JobState.Active && job.cancellationRequested && (
-        <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4">
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4 space-y-3">
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-yellow-600" />
             <p className="text-sm font-medium text-yellow-800">
               {job.cancellationRequestor?.toLowerCase() === address?.toLowerCase()
                 ? "You have requested cancellation. Waiting for the counterparty to accept."
                 : job.cancellationRequestor?.toLowerCase() === job.client.toLowerCase()
-                  ? "The client has requested cancellation."
-                  : "The freelancer has requested cancellation."}
+                  ? "The client has requested mutual cancellation."
+                  : "The freelancer has requested mutual cancellation."}
             </p>
           </div>
+          {/* Show options for the counterparty */}
+          {job.cancellationRequestor?.toLowerCase() !== address?.toLowerCase() && (
+            <div className="text-xs text-yellow-700 space-y-2">
+              <p>
+                You can <strong>Accept</strong> to mutually cancel the job (remaining funds will be returned), or <strong>Decline</strong> to continue working.
+                Declining simply dismisses this request — the job will continue as normal.
+              </p>
+              <div className="flex gap-2">
+                <TransactionButton
+                  onClick={async () => {
+                    await acceptCancellation(job.jobId);
+                    refresh();
+                  }}
+                  isLoading={txLoading}
+                  variant="danger"
+                  className="text-xs py-1 px-3"
+                >
+                  Accept Cancellation
+                </TransactionButton>
+                <button
+                  onClick={() => {
+                    toast.success("Cancellation request declined. Job continues as normal.");
+                    refresh();
+                  }}
+                  className="text-xs py-1 px-3 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                >
+                  Decline
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

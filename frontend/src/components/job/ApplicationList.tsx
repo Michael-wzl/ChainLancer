@@ -153,6 +153,21 @@ export function ApplicationList({
         // 5. AES-decrypt the proposal body
         const encryptedBody = hexToBuffer(envelope.encryptedBody);
         const plaintext = await decrypt(encryptedBody, proposalKeyHex);
+
+        // FE-7 fix: Verify proposal hash after decryption to detect tampering
+        if (app.proposalHash && app.proposalHash !== "0x" + "0".repeat(64)) {
+          const { ethers: ethersLib } = await import("ethers");
+          const recomputedHash = ethersLib.keccak256(ethersLib.toUtf8Bytes(plaintext));
+          if (recomputedHash !== app.proposalHash) {
+            console.warn("Proposal hash mismatch!", { recomputedHash, onChain: app.proposalHash });
+            setProposalError(
+              "⚠️ Proposal integrity check FAILED — the decrypted content does not match the on-chain hash. " +
+              "This proposal may have been tampered with."
+            );
+            return;
+          }
+        }
+
         setProposalContent(plaintext);
       } catch (err) {
         console.error("Failed to decrypt proposal:", err);

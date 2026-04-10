@@ -149,11 +149,10 @@ export function MilestoneActions({
         return;
       }
 
+      // SC-3 fix: Hash the plaintext BEFORE encrypting so the on-chain hash
+      // matches the actual deliverable content, not the ciphertext.
+      const deliverableHash = computeContentHash(deliverableText);
       const contentBytes = await encrypt(deliverableText, jobKey);
-
-      const deliverableHash = computeContentHash(
-        bufferToHex(contentBytes)
-      );
       const blob = new Blob([contentBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
       const cid = await uploadFile(blob, `job-${job.jobId}-ms-${milestoneIdx}`);
       await submitMilestone(job.jobId, milestoneIdx, deliverableHash, cid);
