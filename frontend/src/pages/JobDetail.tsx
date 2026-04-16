@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -112,11 +112,71 @@ export default function JobDetail() {
     jobId !== null && address ? getJobKey(jobId, address) : null
   );
   const cachedTitle = jobId !== null ? getJobTitle(jobId) : null;
+  const clientRecoveryAttemptRef = useRef<string | null>(null);
+  const [clientRecoveryUnsupported, setClientRecoveryUnsupported] = useState(false);
 
   // Keep jobKeyHex in sync when jobId or address changes
   useEffect(() => {
     setJobKeyHex(jobId !== null && address ? getJobKey(jobId, address) : null);
   }, [jobId, address]);
+
+  const recoverClientJobKeyFromAgreement = useCallback(async (): Promise<string | null> => {
+    if (
+      jobId === null
+      || !address
+      || !job
+      || !agreementCID
+      || job.client.toLowerCase() !== address.toLowerCase()
+    ) {
+      return null;
+    }
+
+    try {
+      const rawText = await retrieveFromIPFS(agreementCID);
+      const parsed = JSON.parse(rawText) as Record<string, unknown>;
+      const envelopeContent = (parsed.pinataContent ?? parsed) as Record<string, unknown>;
+      const wrappedKeyForClient = envelopeContent.wrappedKeyForClient;
+
+      if (typeof wrappedKeyForClient !== "string" || wrappedKeyForClient.length === 0) {
+        setClientRecoveryUnsupported(true);
+        return null;
+      }
+
+      const encryptedBytes = hexToEncryptedKey(wrappedKeyForClient);
+      if (encryptedBytes.length === 0) {
+        setClientRecoveryUnsupported(true);
+        return null;
+      }
+
+      const decryptedKeyHex = await decryptWithPrivateKey(encryptedBytes, address);
+      storeJobKey(jobId, decryptedKeyHex, address);
+      setJobKeyHex(decryptedKeyHex);
+      setClientRecoveryUnsupported(false);
+      return decryptedKeyHex;
+    } catch (err) {
+      console.debug("Client job key recovery failed:", err);
+      return null;
+    }
+  }, [address, agreementCID, job, jobId]);
+
+  useEffect(() => {
+    const recoveryKey = `${jobId ?? "none"}:${address ?? "none"}:${agreementCID ?? "none"}`;
+    if (clientRecoveryAttemptRef.current === recoveryKey) return;
+
+    if (
+      jobId === null
+      || !address
+      || !job
+      || !agreementCID
+      || jobKeyHex
+      || job.client.toLowerCase() !== address.toLowerCase()
+    ) {
+      return;
+    }
+
+    clientRecoveryAttemptRef.current = recoveryKey;
+    void recoverClientJobKeyFromAgreement();
+  }, [address, agreementCID, job, jobId, jobKeyHex, recoverClientJobKeyFromAgreement]);
 
   // Auto-decrypt job key for selected freelancer who doesn't have it locally
   useEffect(() => {
@@ -162,9 +222,13 @@ export default function JobDetail() {
     setAgreementLoading(true);
     setAgreementError(null);
     try {
+      const isCurrentUserClient = !!job && !!address && job.client.toLowerCase() === address.toLowerCase();
       // BUG FIX: Re-read key from localStorage as a fallback,
       // in case the state hasn't updated yet after auto-decryption
-      const effectiveKey = jobKeyHex ?? (jobId !== null && address ? getJobKey(jobId, address) : null);
+      let effectiveKey = jobKeyHex ?? (jobId !== null && address ? getJobKey(jobId, address) : null);
+      if (!effectiveKey && isCurrentUserClient) {
+        effectiveKey = await recoverClientJobKeyFromAgreement();
+      }
       if (effectiveKey && !jobKeyHex) {
         setJobKeyHex(effectiveKey);
       }
@@ -232,7 +296,11 @@ export default function JobDetail() {
           }
         } catch { /* ignore */ }
       } else {
-        setAgreementError("No decryption key found for this job. The agreement is encrypted.");
+        setAgreementError(
+          clientRecoveryUnsupported
+            ? "No decryption key found for this job. This job was created before client key recovery was added, so the key cannot be restored automatically."
+            : "No decryption key found for this job. The agreement is encrypted."
+        );
       }
     } catch (err) {
       console.error("Failed to fetch/decrypt agreement:", err);
@@ -247,7 +315,7 @@ export default function JobDetail() {
     } finally {
       setAgreementLoading(false);
     }
-  }, [agreementCID, agreementText, jobKeyHex, jobId, address]);
+  }, [agreementCID, agreementText, jobKeyHex, jobId, address, clientRecoveryUnsupported, recoverClientJobKeyFromAgreement, job]);
   useEffect(() => {
     async function fetchAgreementCID() {
       if (!readContracts.dataAvailability || jobId === null) return;
@@ -501,9 +569,14 @@ export default function JobDetail() {
               applications={applications}
               onSelect={async (freelancerAddr) => {
                 // Encrypt the job key for the freelancer using their on-chain pubkey
-                const keyHex = getJobKey(job.jobId, address ?? undefined);
+                const keyHex = getJobKey(job.jobId, address ?? undefined)
+                  ?? await recoverClientJobKeyFromAgreement();
                 if (!keyHex) {
-                  throw new Error("No job key found. Cannot select freelancer without encryption key.");
+                  throw new Error(
+                    clientRecoveryUnsupported
+                      ? "No job key found. This job was created before client key recovery was added, so you must use the original browser that posted the job."
+                      : "No job key found. Cannot select freelancer without encryption key."
+                  );
                 }
                 // Look up freelancer's encryption public key from contract
                 const freelancerPubKey: string = await readContracts.jobEscrow!.encryptionPubKeys(freelancerAddr);
@@ -515,9 +588,14 @@ export default function JobDetail() {
                 refresh();
               }}
               onReselect={async (freelancerAddr) => {
-                const keyHex = getJobKey(job.jobId, address ?? undefined);
+                const keyHex = getJobKey(job.jobId, address ?? undefined)
+                  ?? await recoverClientJobKeyFromAgreement();
                 if (!keyHex) {
-                  throw new Error("No job key found. Cannot reselect freelancer without encryption key.");
+                  throw new Error(
+                    clientRecoveryUnsupported
+                      ? "No job key found. This job was created before client key recovery was added, so you must use the original browser that posted the job."
+                      : "No job key found. Cannot reselect freelancer without encryption key."
+                  );
                 }
                 const freelancerPubKey: string = await readContracts.jobEscrow!.encryptionPubKeys(freelancerAddr);
                 if (!freelancerPubKey || freelancerPubKey === "0x") {

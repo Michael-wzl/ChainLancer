@@ -6,6 +6,7 @@ import { TransactionButton } from "../common/TransactionButton";
 import { DisputePhase, Ruling } from "../../config/constants";
 import { formatBps } from "../../utils/format";
 import toast from "react-hot-toast";
+import { useSingleFlight } from "../../hooks/useSingleFlight";
 
 // ─── Types ───
 
@@ -25,12 +26,15 @@ export function RulingForm({
   onRulingExecuted,
 }: RulingFormProps) {
   const { submitRuling, executeRuling, loading } = useDispute();
+  const { runWithLock, isLocked } = useSingleFlight();
 
   const [ruling, setRuling] = useState<Ruling>(Ruling.Inconclusive);
   const [freelancerShareBps, setFreelancerShareBps] = useState(5000);
   const [depositSlashBps, setDepositSlashBps] = useState(0);
   const [reasoning, setReasoning] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const rulingSubmitLockKey = `submit-ruling:${disputeId}`;
+  const rulingSubmitLocked = isLocked(rulingSubmitLockKey);
 
   // Auto-fill defaults when ruling changes
   useEffect(() => {
@@ -76,43 +80,49 @@ export function RulingForm({
   }, [ruling, freelancerShareBps, depositSlashBps, reasoning]);
 
   const handleSubmitRuling = async () => {
-    if (validationError) {
-      toast.error(validationError);
-      return;
-    }
+    return runWithLock(
+      rulingSubmitLockKey,
+      async () => {
+        if (validationError) {
+          toast.error(validationError);
+          return;
+        }
 
-    try {
-      const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes(reasoning));
+        try {
+          const reasoningHash = ethers.keccak256(ethers.toUtf8Bytes(reasoning));
 
-      // FE-6 fix: Persist the ruling reasoning to IPFS (encrypted if possible)
-      // so there is an auditable record of the judge's rationale.
-      try {
-        const { uploadJSON } = await import("../../ipfs/pinata");
-        const reasoningDoc = {
-          disputeId,
-          ruling,
-          reasoning,
-          reasoningHash,
-          timestamp: Date.now(),
-        };
-        const cid = await uploadJSON(reasoningDoc, `ruling-reasoning-${disputeId}-${Date.now()}`);
-        console.log("Ruling reasoning persisted to IPFS:", cid);
-      } catch (ipfsErr) {
-        // Non-blocking: reasoning hash still goes on-chain even if IPFS fails
-        console.warn("Failed to persist ruling reasoning to IPFS:", ipfsErr);
-      }
+          try {
+            toast.loading("Uploading ruling reasoning…", { id: "ruling-stage" });
+            const { uploadJSON } = await import("../../ipfs/pinata");
+            const reasoningDoc = {
+              disputeId,
+              ruling,
+              reasoning,
+              reasoningHash,
+              timestamp: Date.now(),
+            };
+            const cid = await uploadJSON(reasoningDoc, `ruling-reasoning-${disputeId}-${Date.now()}`);
+            console.log("Ruling reasoning persisted to IPFS:", cid);
+          } catch (ipfsErr) {
+            console.warn("Failed to persist ruling reasoning to IPFS:", ipfsErr);
+          }
 
-      await submitRuling(
-        disputeId,
-        ruling,
-        reasoningHash,
-        freelancerShareBps,
-        depositSlashBps
-      );
-      onRulingSubmitted();
-    } catch {
-      // Error already handled in hook
-    }
+          toast.loading("Waiting for MetaMask…", { id: "ruling-stage" });
+          await submitRuling(
+            disputeId,
+            ruling,
+            reasoningHash,
+            freelancerShareBps,
+            depositSlashBps
+          );
+          toast.success("Ruling submitted!", { id: "ruling-stage" });
+          onRulingSubmitted();
+        } catch {
+          toast.dismiss("ruling-stage");
+        }
+      },
+      () => toast("Request already in progress")
+    );
   };
 
   const handleExecuteRuling = async () => {
@@ -220,13 +230,13 @@ export function RulingForm({
           {/* Submit button */}
           <TransactionButton
             onClick={handleSubmitRuling}
-            isLoading={loading}
+            isLoading={loading || rulingSubmitLocked}
             disabled={!!validationError}
             variant="primary"
             className="w-full justify-center"
           >
             <Gavel className="mr-2 h-4 w-4" />
-            Submit Ruling
+            {rulingSubmitLocked ? "Uploading…" : "Submit Ruling"}
           </TransactionButton>
         </div>
       </div>

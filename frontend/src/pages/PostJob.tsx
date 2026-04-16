@@ -13,14 +13,16 @@ import { generateJobKey, generateSalt, bufferToHex } from "../crypto/jobKey";
 import { encrypt } from "../crypto/aes";
 import { computeAgreementHash } from "../crypto/hash";
 import { recoverPublicKey } from "../crypto/ecies";
+import { encryptForRecipient } from "../crypto/keyExchange";
 import { uploadFile } from "../ipfs/pinata";
 import { parseContractError } from "../utils/errors";
-import { storeJobKey } from "../utils/storage";
+import { clearPendingJobKey, storeJobKey, storePendingJobKey } from "../utils/storage";
 import { storeJobTitle } from "../utils/storage";
 import { getBlockTimestamp } from "../hooks/useBlockTimestamp";
 import { parseUSDC, formatUSDC } from "../utils/format";
 import { getContractAddresses } from "../config/contracts";
 import JobEscrowABI from "../abis/JobEscrow.json";
+import { useSingleFlight } from "../hooks/useSingleFlight";
 import {
   REVIEW_TIMEOUT_OPTIONS,
   PROTOCOL_FEE_BPS,
@@ -38,6 +40,48 @@ interface MilestoneInput {
   deadlineDays: string;
 }
 
+async function resolvePostedJobId(
+  contract: NonNullable<ReturnType<typeof useContracts>["contracts"]["jobEscrow"]>,
+  receipt: Awaited<ReturnType<ethers.ContractTransactionResponse["wait"]>>,
+  clientAddress: string,
+  txHash?: string,
+): Promise<number | null> {
+  if (!receipt) return null;
+
+  const iface = new ethers.Interface(JobEscrowABI);
+  for (const log of receipt.logs ?? []) {
+    try {
+      const parsed = iface.parseLog({
+        topics: log.topics as string[],
+        data: log.data,
+      });
+      if (parsed?.name === "JobPosted") {
+        return Number(parsed.args.jobId);
+      }
+    } catch {
+      // skip unrelated logs
+    }
+  }
+
+  try {
+    const filter = contract.filters.JobPosted(null, clientAddress);
+    const events = await contract.queryFilter(filter, receipt.blockNumber, receipt.blockNumber);
+    const matchingEvent = events.find((event) => {
+      const eventTxHash = (event as { transactionHash?: string }).transactionHash
+        ?? (event as { log?: { transactionHash?: string } }).log?.transactionHash;
+      return txHash ? eventTxHash === txHash : true;
+    });
+
+    if (matchingEvent && "args" in matchingEvent && matchingEvent.args?.[0] !== undefined) {
+      return Number(matchingEvent.args[0]);
+    }
+  } catch (err) {
+    console.warn("Fallback JobPosted lookup failed:", err);
+  }
+
+  return null;
+}
+
 export default function PostJob() {
   const navigate = useNavigate();
   const { address, isConnected } = useWallet();
@@ -45,6 +89,7 @@ export default function PostJob() {
   const { postJob, registerEncryptionKey, isLoading } = useJobEscrow();
   const { approveJobEscrow, isLoading: approveLoading } = useMockUSDC();
   const { getClientTier } = useReputation();
+  const { runWithLock, isLocked } = useSingleFlight();
 
   // ─── Client tier for bond calculation ───
   const [clientTier, setClientTier] = useState<Tier>(Tier.New);
@@ -124,211 +169,217 @@ export default function PostJob() {
   });
 
   const hasMilestoneBelowMinimum = milestoneBelowMinimum.some(Boolean);
+  const submitLockKey = `post-job:${address ?? "disconnected"}`;
+  const submitLocked = isLocked(submitLockKey);
 
   // ─── Submit ───
   const handleSubmit = useCallback(async () => {
-    if (!address) {
-      toast.error("Please connect your wallet first.");
-      return;
-    }
+    return runWithLock(
+      submitLockKey,
+      async () => {
+        if (!address) {
+          toast.error("Please connect your wallet first.");
+          return;
+        }
 
-    // Validate
-    if (!title.trim()) {
-      toast.error("Please provide a job title.");
-      return;
-    }
-    if (milestones.some((ms) => !ms.value || parseUSDC(ms.value) === 0n)) {
-      toast.error("All milestones must have a value greater than 0.");
-      return;
-    }
-    // Check minimum milestone percentage (must be ≥ 10% of total value)
-    if (totalValue > 0n) {
-      const violating = milestones
-        .map((ms, i) => ({ ms, i }))
-        .filter(({ ms }) => {
-          try {
-            const val = parseUSDC(ms.value || "0");
-            return (val * 10_000n) / totalValue < MIN_MILESTONE_BPS;
-          } catch {
-            return false;
+        // Validate
+        if (!title.trim()) {
+          toast.error("Please provide a job title.");
+          return;
+        }
+        if (milestones.some((ms) => !ms.value || parseUSDC(ms.value) === 0n)) {
+          toast.error("All milestones must have a value greater than 0.");
+          return;
+        }
+        if (totalValue > 0n) {
+          const violating = milestones
+            .map((ms, i) => ({ ms, i }))
+            .filter(({ ms }) => {
+              try {
+                const val = parseUSDC(ms.value || "0");
+                return (val * 10_000n) / totalValue < MIN_MILESTONE_BPS;
+              } catch {
+                return false;
+              }
+            });
+          if (violating.length > 0) {
+            const names = violating.map(({ i }) => `#${i + 1}`).join(", ");
+            toast.error(
+              `Milestone ${names} ${violating.length === 1 ? "is" : "are"} below the 10% minimum. Each milestone must be at least 10% of the total job value.`
+            );
+            return;
           }
-        });
-      if (violating.length > 0) {
-        const names = violating.map(({ i }) => `#${i + 1}`).join(", ");
-        toast.error(
-          `Milestone ${names} ${violating.length === 1 ? "is" : "are"} below the 10% minimum. Each milestone must be at least 10% of the total job value.`
-        );
-        return;
-      }
-    }
-
-    try {
-      // 0) Ensure our encryption public key is registered on-chain
-      if (contracts.jobEscrow) {
-        const myPubKeyHex = await recoverPublicKey();
-        const existingPubKey = await contracts.jobEscrow.encryptionPubKeys(address);
-        if (!existingPubKey || existingPubKey === "0x" || existingPubKey.toLowerCase() !== myPubKeyHex.toLowerCase()) {
-          toast.loading("Registering encryption key…", { id: "regkey" });
-          await registerEncryptionKey(myPubKeyHex);
-          toast.success("Encryption key registered!", { id: "regkey" });
         }
-      }
 
-      // 1) Generate job key + salt
-      const jobKeyHex = await generateJobKey();
-      const saltHex = generateSalt();
+        let pendingTempId: string | null = null;
+        let preservePendingDraft = false;
 
-      // 2) Build agreement document
-      const agreement = {
-        title,
-        description,
-        requirements,
-        milestones: milestones.map((ms, i) => ({
-          index: i,
-          description: ms.description,
-          value: ms.value,
-          deadlineDays: ms.deadlineDays,
-        })),
-        reviewTimeout,
-        postedBy: address,
-        timestamp: Date.now(),
-      };
-
-      const agreementText = JSON.stringify(agreement);
-
-      // 3) Compute agreement hash (salt || plaintext)
-      const agreementHash = computeAgreementHash(saltHex, agreementText);
-
-      // 4) Encrypt the agreement
-      const encryptedBytes = await encrypt(agreementText, jobKeyHex);
-
-      // 5) Check USDC balance and allowance BEFORE uploading to IPFS
-      if (contracts.mockUSDC) {
-        const contractAddresses = getContractAddresses();
-        const balance = await contracts.mockUSDC.balanceOf(address);
-        if (balance < totalRequired) {
-          toast.error(
-            `Insufficient USDC balance. You have ${formatUSDC(
-              balance,
-            )} but need ${formatUSDC(
-              totalRequired,
-            )}. Visit the Wallet page to get test USDC.`,
-          );
-          return;
-        }
-        const allowance = await contracts.mockUSDC.allowance(
-          address,
-          contractAddresses.JobEscrow,
-        );
-        if (allowance < totalRequired) {
-          toast.error(
-            `Insufficient USDC allowance. Please click "Approve USDC" first to allow JobEscrow to spend your USDC.`,
-          );
-          return;
-        }
-      }
-
-      // 6) Prepare on-chain params
-      const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
-      // BUG FIX: Use blockchain time instead of Date.now() so that
-      // deadlines are correctly computed after evm_increaseTime (time forwarding).
-      const now = await getBlockTimestamp();
-      const milestoneDeadlines = milestones.map(
-        (ms) => now + Number(ms.deadlineDays) * 86400,
-      );
-
-      // 7) Dry-run the transaction to catch reverts BEFORE uploading to IPFS
-      //    Use a placeholder CID for the dry-run — the actual CID doesn't affect
-      //    gas estimation or revert checks (balance, allowance, parameters).
-      if (contracts.jobEscrow) {
         try {
-          await contracts.jobEscrow.postJob.estimateGas(
+          let myPubKeyHex: string | null = null;
+
+          if (contracts.jobEscrow) {
+            myPubKeyHex = await recoverPublicKey();
+            const existingPubKey = await contracts.jobEscrow.encryptionPubKeys(address);
+            if (
+              !existingPubKey
+              || existingPubKey === "0x"
+              || existingPubKey.toLowerCase() !== myPubKeyHex.toLowerCase()
+            ) {
+              toast.loading("Registering encryption key…", { id: "regkey" });
+              await registerEncryptionKey(myPubKeyHex);
+              toast.success("Encryption key registered!", { id: "regkey" });
+            }
+          }
+
+          const jobKeyHex = await generateJobKey();
+          const saltHex = generateSalt();
+
+          const agreement = {
+            title,
+            description,
+            requirements,
+            milestones: milestones.map((ms, i) => ({
+              index: i,
+              description: ms.description,
+              value: ms.value,
+              deadlineDays: ms.deadlineDays,
+            })),
+            reviewTimeout,
+            postedBy: address,
+            timestamp: Date.now(),
+          };
+
+          const agreementText = JSON.stringify(agreement);
+          const agreementHash = computeAgreementHash(saltHex, agreementText);
+          const encryptedBytes = await encrypt(agreementText, jobKeyHex);
+
+          pendingTempId = `postjob_${address.toLowerCase()}_${Date.now()}`;
+          storePendingJobKey({
+            tempId: pendingTempId,
+            jobKeyHex,
+            title,
+            agreementHash,
+            createdBy: address,
+            createdAt: Date.now(),
+          });
+
+          if (contracts.mockUSDC) {
+            const contractAddresses = getContractAddresses();
+            const balance = await contracts.mockUSDC.balanceOf(address);
+            if (balance < totalRequired) {
+              toast.error(
+                `Insufficient USDC balance. You have ${formatUSDC(balance)} but need ${formatUSDC(totalRequired)}. Visit the Wallet page to get test USDC.`
+              );
+              clearPendingJobKey(pendingTempId);
+              return;
+            }
+            const allowance = await contracts.mockUSDC.allowance(
+              address,
+              contractAddresses.JobEscrow,
+            );
+            if (allowance < totalRequired) {
+              toast.error(
+                'Insufficient USDC allowance. Please click "Approve USDC" first to allow JobEscrow to spend your USDC.'
+              );
+              clearPendingJobKey(pendingTempId);
+              return;
+            }
+          }
+
+          const milestoneValues = milestones.map((ms) => parseUSDC(ms.value));
+          const now = await getBlockTimestamp();
+          const milestoneDeadlines = milestones.map(
+            (ms) => now + Number(ms.deadlineDays) * 86400,
+          );
+
+          if (contracts.jobEscrow) {
+            try {
+              await contracts.jobEscrow.postJob.estimateGas(
+                agreementHash,
+                milestoneValues,
+                milestoneDeadlines,
+                reviewTimeout,
+                "QmPlaceholderDryRun",
+              );
+            } catch (dryRunErr) {
+              clearPendingJobKey(pendingTempId);
+              const msg = parseContractError(dryRunErr);
+              toast.error(`Transaction will fail: ${msg}`);
+              return;
+            }
+          }
+
+          toast.loading("Uploading agreement…", { id: "post-job-stage" });
+          const wrappedKeyForClient = myPubKeyHex
+            ? bufferToHex(await encryptForRecipient(jobKeyHex, myPubKeyHex))
+            : null;
+          const envelope = {
+            version: 2,
+            salt: saltHex,
+            encrypted: bufferToHex(encryptedBytes),
+            publicSummary: {
+              title,
+              milestoneCount: milestones.length,
+            },
+            ...(wrappedKeyForClient ? { wrappedKeyForClient } : {}),
+          };
+          const envelopeJSON = JSON.stringify(envelope);
+          const envelopeBlob = new Blob([envelopeJSON], { type: "application/json" });
+          const agreementCID = await uploadFile(
+            envelopeBlob,
+            `job-agreement-${Date.now()}`,
+          );
+          toast.loading("Waiting for MetaMask…", { id: "post-job-stage" });
+
+          const { tx, receipt } = await postJob(
             agreementHash,
             milestoneValues,
             milestoneDeadlines,
             reviewTimeout,
-            "QmPlaceholderDryRun",
+            agreementCID,
           );
-        } catch (dryRunErr) {
-          const msg = parseContractError(dryRunErr);
-          toast.error(`Transaction will fail: ${msg}`);
-          return;
-        }
-      }
 
-      // 8) Upload encrypted agreement envelope (including salt) to IPFS
-      //    Salt is embedded in the envelope so it can always be retrieved from
-      //    the same CID as the encrypted agreement.
-      //    publicSummary is an UNENCRYPTED summary so that anyone browsing
-      //    the job can read the agreement details without needing the job key.
-      // FE-2 fix: Only expose minimal metadata in the public summary to
-      // avoid leaking the full agreement in cleartext on IPFS.
-      const envelope = {
-        version: 1,
-        salt: saltHex,
-        encrypted: bufferToHex(encryptedBytes),
-        publicSummary: {
-          title,
-          milestoneCount: milestones.length,
-        },
-      };
-      const envelopeJSON = JSON.stringify(envelope);
-      const envelopeBlob = new Blob([envelopeJSON], { type: "application/json" });
-      const agreementCID = await uploadFile(
-        envelopeBlob,
-        `job-agreement-${Date.now()}`,
-      );
-      toast.success("Agreement uploaded to IPFS!");
-
-      // 9) Post the job on-chain
-      const { receipt } = await postJob(
-        agreementHash,
-        milestoneValues,
-        milestoneDeadlines,
-        reviewTimeout,
-        agreementCID,
-      );
-
-      // 10) Extract jobId from events using ethers Interface
-      let jobId: number | null = null;
-      if (receipt?.logs) {
-        const iface = new ethers.Interface(JobEscrowABI);
-        for (const log of receipt.logs) {
-          try {
-            const parsed = iface.parseLog({
-              topics: log.topics as string[],
-              data: log.data,
-            });
-            if (parsed && parsed.name === "JobPosted") {
-              jobId = Number(parsed.args.jobId);
-              break;
-            }
-          } catch {
-            // skip non-matching logs
+          let jobId: number | null = null;
+          if (contracts.jobEscrow && receipt) {
+            jobId = await resolvePostedJobId(
+              contracts.jobEscrow,
+              receipt,
+              address,
+              tx.hash,
+            );
           }
+
+          if (jobId === null) {
+            preservePendingDraft = true;
+            console.error("Failed to determine jobId from transaction logs");
+          }
+
+          if (jobId !== null) {
+            storeJobKey(jobId, jobKeyHex, address);
+            storeJobTitle(jobId, title);
+            clearPendingJobKey(pendingTempId);
+            toast.success(`Job #${jobId} created! Key saved locally.`, { id: "post-job-stage" });
+          } else {
+            toast.success(
+              "Job created! Pending job key draft was preserved because job ID resolution failed.",
+              { id: "post-job-stage" }
+            );
+          }
+
+          navigate(jobId !== null ? `/job/${jobId}` : "/");
+        } catch (err) {
+          if (pendingTempId && !preservePendingDraft) {
+            clearPendingJobKey(pendingTempId);
+          }
+          toast.dismiss("post-job-stage");
+          console.error("PostJob error:", err);
         }
-      }
-
-      if (jobId === null) {
-        console.error("Failed to determine jobId from transaction logs");
-      }
-
-      // 11) Store the job key + title locally
-      if (jobId !== null) {
-        storeJobKey(jobId, jobKeyHex, address);
-        storeJobTitle(jobId, title);
-        toast.success(`Job #${jobId} created! Key saved locally.`);
-      } else {
-        toast.success(
-          "Job created! Could not determine job ID for key storage.",
-        );
-      }
-
-      navigate(jobId !== null ? `/job/${jobId}` : "/");
-    } catch (err) {
-      console.error("PostJob error:", err);
-    }
+      },
+      () => toast("Request already in progress")
+    );
   }, [
+    runWithLock,
+    submitLockKey,
     address,
     title,
     description,
@@ -338,6 +389,10 @@ export default function PostJob() {
     postJob,
     navigate,
     contracts.jobEscrow,
+    contracts.mockUSDC,
+    registerEncryptionKey,
+    totalRequired,
+    totalValue,
   ]);
 
   if (!isConnected) {
@@ -565,11 +620,11 @@ export default function PostJob() {
 
           <TransactionButton
             onClick={handleSubmit}
-            isLoading={isLoading}
+            isLoading={isLoading || submitLocked}
             variant="primary"
-            disabled={hasMilestoneBelowMinimum}
+            disabled={hasMilestoneBelowMinimum || submitLocked}
           >
-            <PlusCircle className="mr-1.5 h-4 w-4" /> Post Job
+            <PlusCircle className="mr-1.5 h-4 w-4" /> {submitLocked ? "Uploading…" : "Post Job"}
           </TransactionButton>
         </div>
       </div>

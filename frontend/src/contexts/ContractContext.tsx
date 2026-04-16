@@ -91,7 +91,7 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
 
   // Read-only contracts (with wallet provider or fallback provider)
   const readContracts = useMemo<ContractInstances>(() => {
-    const readProvider = provider || fallbackProvider;
+    const readProvider = fallbackProvider;
 
     try {
       return {
@@ -129,7 +129,7 @@ export function ContractProvider({ children }: { children: React.ReactNode }) {
         mockUSDC: null,
       };
     }
-  }, [provider, fallbackProvider, addresses]);
+  }, [fallbackProvider, addresses]);
 
   const isReady = useMemo(() => {
     return !!(contracts.jobEscrow && contracts.mockUSDC);

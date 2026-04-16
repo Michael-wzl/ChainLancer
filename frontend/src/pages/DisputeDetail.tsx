@@ -18,6 +18,7 @@ import { uploadJSON } from "../ipfs/pinata";
 import { parseContractError } from "../utils/errors";
 import { formatUSDC, truncateAddress, formatDate } from "../utils/format";
 import { getJobKey } from "../utils/storage";
+import { useSingleFlight } from "../hooks/useSingleFlight";
 import {
   DisputePhase,
   Ruling,
@@ -66,6 +67,7 @@ export default function DisputeDetail() {
   const [loading, setLoading] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
   const [evidenceText, setEvidenceText] = useState("");
+  const { runWithLock, isLocked } = useSingleFlight();
 
   const isClient = address?.toLowerCase() === job?.client?.toLowerCase();
   const isFreelancer =
@@ -98,6 +100,8 @@ export default function DisputeDetail() {
   }, [readContracts.dispute, address]);
 
   const isAuthorizedViewer = isClient || isFreelancer || isJudge || isAdmin;
+  const evidenceLockKey = `submit-evidence:${jobId ?? "unknown"}:${milestoneIdx}:${address ?? "disconnected"}`;
+  const evidenceLocked = isLocked(evidenceLockKey);
 
   // Fetch dispute info — first resolve disputeId from JobEscrow, then query Dispute contract
   const fetchDispute = useCallback(async () => {
@@ -158,65 +162,65 @@ export default function DisputeDetail() {
 
   // Submit evidence
   const handleSubmitEvidence = async () => {
-    if (!contracts.dispute || jobId === null || disputeId === null || !address) return;
-    if (!evidenceText.trim()) {
-      toast.error("Please enter evidence details.");
-      return;
-    }
+    return runWithLock(
+      evidenceLockKey,
+      async () => {
+        if (!contracts.dispute || jobId === null || disputeId === null || !address) return;
+        if (!evidenceText.trim()) {
+          toast.error("Please enter evidence details.");
+          return;
+        }
 
-    setTxLoading(true);
-    try {
-      const evidenceDoc = {
-        submitter: address,
-        jobId,
-        milestoneIdx,
-        content: evidenceText,
-        timestamp: Date.now(),
-      };
+        setTxLoading(true);
+        try {
+          const evidenceDoc = {
+            submitter: address,
+            jobId,
+            milestoneIdx,
+            content: evidenceText,
+            timestamp: Date.now(),
+          };
 
-      // Bug #1 fix: use disputeId (not jobId), compute evidenceHash (keccak256)
-      const evidenceHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(evidenceDoc)));
+          const evidenceHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(evidenceDoc)));
 
-      // Dry-run the transaction to catch reverts BEFORE uploading to IPFS
-      try {
-        await contracts.dispute.submitEvidence.estimateGas(disputeId, evidenceHash, "QmPlaceholderDryRun");
-      } catch (dryRunErr) {
-        toast.error(`Transaction will fail: ${parseContractError(dryRunErr)}`, { id: "evidence" });
-        setTxLoading(false);
-        return;
-      }
+          try {
+            await contracts.dispute.submitEvidence.estimateGas(disputeId, evidenceHash, "QmPlaceholderDryRun");
+          } catch (dryRunErr) {
+            toast.error(`Transaction will fail: ${parseContractError(dryRunErr)}`, { id: "evidence" });
+            return;
+          }
 
-      // FE-4 fix: Encrypt evidence with the job key before uploading to IPFS
-      // so that dispute evidence is not stored as plaintext.
-      const jobKey = getJobKey(Number(jobId), address);
-      let cid: string;
-      if (jobKey) {
-        const { encrypt } = await import("../crypto/aes");
-        const { bufferToHex } = await import("../crypto/jobKey");
-        const { uploadFile } = await import("../ipfs/pinata");
-        const plainBytes = new TextEncoder().encode(JSON.stringify(evidenceDoc));
-        const encryptedBytes = await encrypt(new TextDecoder().decode(plainBytes), jobKey);
-        const blob = new Blob([encryptedBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
-        cid = await uploadFile(blob, `evidence-${jobId}-${milestoneIdx}-${Date.now()}`);
-      } else {
-        // Fallback: upload as JSON if no key available (should not normally happen)
-        cid = await uploadJSON(
-          evidenceDoc,
-          `evidence-${jobId}-${milestoneIdx}-${Date.now()}`
-        );
-      }
+          toast.loading("Uploading evidence…", { id: "evidence" });
+          const jobKey = getJobKey(Number(jobId), address);
+          let cid: string;
+          if (jobKey) {
+            const { encrypt } = await import("../crypto/aes");
+            const { uploadFile } = await import("../ipfs/pinata");
+            const plainBytes = new TextEncoder().encode(JSON.stringify(evidenceDoc));
+            const encryptedBytes = await encrypt(new TextDecoder().decode(plainBytes), jobKey);
+            const blob = new Blob([encryptedBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
+            cid = await uploadFile(blob, `evidence-${jobId}-${milestoneIdx}-${Date.now()}`);
+          } else {
+            cid = await uploadJSON(
+              evidenceDoc,
+              `evidence-${jobId}-${milestoneIdx}-${Date.now()}`
+            );
+          }
 
-      const tx = await contracts.dispute.submitEvidence(disputeId, evidenceHash, cid);
-      toast.loading("Submitting evidence...", { id: "evidence" });
-      await tx.wait();
-      toast.success("Evidence submitted!", { id: "evidence" });
-      setEvidenceText("");
-      fetchDispute();
-    } catch (err) {
-      toast.error(parseContractError(err), { id: "evidence" });
-    } finally {
-      setTxLoading(false);
-    }
+          toast.loading("Waiting for MetaMask…", { id: "evidence" });
+          const tx = await contracts.dispute.submitEvidence(disputeId, evidenceHash, cid);
+          await tx.wait();
+          toast.success("Evidence submitted!", { id: "evidence" });
+          setEvidenceText("");
+          fetchDispute();
+        } catch (err) {
+          toast.error(parseContractError(err), { id: "evidence" });
+        } finally {
+          setTxLoading(false);
+        }
+      },
+      () => toast("Request already in progress")
+    );
   };
 
   // Hooks
@@ -370,10 +374,11 @@ export default function DisputeDetail() {
                 </p>
                 <TransactionButton
                   onClick={handleSubmitEvidence}
-                  isLoading={txLoading}
+                  isLoading={txLoading || evidenceLocked}
                   variant="primary"
+                  disabled={evidenceLocked}
                 >
-                  <Upload className="mr-1.5 h-4 w-4" /> Submit Evidence
+                  <Upload className="mr-1.5 h-4 w-4" /> {evidenceLocked ? "Uploading…" : "Submit Evidence"}
                 </TransactionButton>
               </>
             ) : (

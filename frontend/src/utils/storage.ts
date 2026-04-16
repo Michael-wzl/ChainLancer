@@ -13,6 +13,18 @@
 const JOB_KEY_PREFIX = "chainlancer_jobkey_";
 const JOB_TITLE_PREFIX = "chainlancer_jobtitle_";
 const PROPOSAL_KEY_PREFIX = "chainlancer_proposalkey_";
+const PENDING_JOB_KEY_PREFIX = "chainlancer_pending_jobkey_";
+
+export const PENDING_JOB_KEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface PendingJobKeyRecord {
+  tempId: string;
+  jobKeyHex: string;
+  title: string;
+  agreementHash: string;
+  createdBy?: string;
+  createdAt: number;
+}
 
 // ─── Internal helpers ───
 
@@ -24,6 +36,14 @@ function jobKeyStorageKey(walletAddress: string, jobId: number): string {
 /** Legacy key format (no address). */
 function legacyJobKeyStorageKey(jobId: number): string {
   return `${JOB_KEY_PREFIX}${jobId}`;
+}
+
+function pendingJobKeyStorageKey(tempId: string): string {
+  return `${PENDING_JOB_KEY_PREFIX}${tempId}`;
+}
+
+function isPendingJobKeyExpired(record: PendingJobKeyRecord): boolean {
+  return Date.now() - record.createdAt > PENDING_JOB_KEY_TTL_MS;
 }
 
 /**
@@ -153,6 +173,89 @@ export function getAllJobKeys(walletAddress?: string): Record<string, string> {
     // ignore
   }
   return keys;
+}
+
+// ─── Pending Job Keys ───
+
+/**
+ * Store a pending job key draft before the final on-chain jobId is known.
+ */
+export function storePendingJobKey(record: PendingJobKeyRecord): void {
+  try {
+    localStorage.setItem(
+      pendingJobKeyStorageKey(record.tempId),
+      JSON.stringify(record)
+    );
+  } catch {
+    console.warn("Failed to store pending job key draft in localStorage");
+  }
+}
+
+/**
+ * Retrieve a pending job key draft by tempId.
+ */
+export function getPendingJobKey(tempId: string): PendingJobKeyRecord | null {
+  try {
+    const raw = localStorage.getItem(pendingJobKeyStorageKey(tempId));
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as PendingJobKeyRecord;
+    if (!parsed?.tempId || !parsed?.jobKeyHex || !parsed?.agreementHash) {
+      return null;
+    }
+
+    if (isPendingJobKeyExpired(parsed)) {
+      localStorage.removeItem(pendingJobKeyStorageKey(tempId));
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove a pending job key draft.
+ */
+export function clearPendingJobKey(tempId: string): void {
+  try {
+    localStorage.removeItem(pendingJobKeyStorageKey(tempId));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * List all non-expired pending job key drafts, optionally filtered by creator address.
+ */
+export function listPendingJobKeys(walletAddress?: string): PendingJobKeyRecord[] {
+  const records: PendingJobKeyRecord[] = [];
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(PENDING_JOB_KEY_PREFIX)) continue;
+
+      const tempId = key.slice(PENDING_JOB_KEY_PREFIX.length);
+      const record = getPendingJobKey(tempId);
+      if (!record) continue;
+
+      if (
+        walletAddress &&
+        record.createdBy?.toLowerCase() !== walletAddress.toLowerCase()
+      ) {
+        continue;
+      }
+
+      records.push(record);
+    }
+  } catch {
+    // ignore
+  }
+
+  records.sort((a, b) => b.createdAt - a.createdAt);
+  return records;
 }
 
 // ─── Proposal Keys (already per-address via freelancerAddr) ───

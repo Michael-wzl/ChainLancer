@@ -18,6 +18,7 @@ import { parseContractError } from "../utils/errors";
 import { formatUSDC, formatReviewTimeout } from "../utils/format";
 import { JobState } from "../config/constants";
 import { JobStateBadge } from "../components/common/StatusBadge";
+import { useSingleFlight } from "../hooks/useSingleFlight";
 
 export default function ApplyJob() {
   const { id } = useParams<{ id: string }>();
@@ -27,102 +28,97 @@ export default function ApplyJob() {
   const jobId = id !== undefined ? Number(id) : null;
   const { job, loading } = useJobDetail(jobId);
   const { applyForJob, registerEncryptionKey, isLoading } = useJobEscrow();
+  const { runWithLock, isLocked } = useSingleFlight();
 
   const [proposalText, setProposalText] = useState("");
   const [experience, setExperience] = useState("");
   const [timeline, setTimeline] = useState("");
+  const applyLockKey = `apply-job:${jobId ?? "unknown"}:${address ?? "disconnected"}`;
+  const applyLocked = isLocked(applyLockKey);
 
   const handleApply = useCallback(async () => {
-    if (!address || jobId === null || !readContracts.jobEscrow) {
-      return;
-    }
-
-    if (!proposalText.trim()) {
-      toast.error("Please write a proposal.");
-      return;
-    }
-
-    try {
-      // 1. Ensure our encryption public key is registered & up-to-date on-chain
-      const myPubKeyHex = await recoverPublicKey();
-      const existingPubKey = await readContracts.jobEscrow.encryptionPubKeys(address);
-      if (!existingPubKey || existingPubKey === "0x" || existingPubKey.toLowerCase() !== myPubKeyHex.toLowerCase()) {
-        toast.loading("Registering encryption key…", { id: "regkey" });
-        await registerEncryptionKey(myPubKeyHex);
-        toast.success("Encryption key registered!", { id: "regkey" });
-      }
-
-      // 2. Read client's public key from chain
-      const clientPubKeyHex: string = await readContracts.jobEscrow.encryptionPubKeys(job!.client);
-      if (!clientPubKeyHex || clientPubKeyHex === "0x") {
-        toast.error("Client has not registered an encryption key. Cannot encrypt proposal.");
-        return;
-      }
-
-      // 3. Build proposal document
-      const proposal = {
-        applicant: address,
-        proposal: proposalText,
-        experience,
-        timeline,
-        submittedAt: Date.now(),
-      };
-      const proposalJSON = JSON.stringify(proposal);
-
-      // 4. Generate a random proposal key (AES-256) and encrypt the proposal body
-      const proposalKeyHex = await generateJobKey();
-      const encryptedBody = await encrypt(proposalJSON, proposalKeyHex);
-
-      // 5. Dual-wrap the proposal key: encrypt for client AND for freelancer (self)
-      const proposalKeyBytes = hexToBuffer(proposalKeyHex);
-      const wrappedForClient = await eciesEncrypt(proposalKeyBytes, clientPubKeyHex);
-
-      // Get own pubkey for self-wrapping
-      const myPubKey = await readContracts.jobEscrow.encryptionPubKeys(address);
-      const wrappedForFreelancer = await eciesEncrypt(proposalKeyBytes, myPubKey as string);
-
-      // 6. Build the IPFS envelope
-      const envelope = {
-        version: 1,
-        encryptedBody: bufferToHex(encryptedBody),
-        wrappedKeyForClient: bufferToHex(wrappedForClient),
-        wrappedKeyForFreelancer: bufferToHex(wrappedForFreelancer),
-        freelancer: address,
-      };
-      const envelopeJSON = JSON.stringify(envelope);
-
-      // 7. Compute hash for on-chain submission
-      const proposalHash = computeContentHash(proposalJSON);
-
-      // 8. Dry-run the transaction to catch reverts BEFORE uploading to IPFS
-      if (readContracts.jobEscrow) {
-        try {
-          await readContracts.jobEscrow.applyForJob.estimateGas(
-            jobId, proposalHash, "QmPlaceholderDryRun",
-            { from: address }
-          );
-        } catch (dryRunErr) {
-          const msg = parseContractError(dryRunErr);
-          toast.error(`Transaction will fail: ${msg}`);
+    return runWithLock(
+      applyLockKey,
+      async () => {
+        if (!address || jobId === null || !readContracts.jobEscrow) {
           return;
         }
-      }
 
-      // 9. Upload to IPFS (only after dry-run passes)
-      const envelopeBlob = new Blob([envelopeJSON], { type: "application/json" });
-      const proposalCID = await uploadFile(envelopeBlob, `proposal-job-${jobId}-${Date.now()}`);
+        if (!proposalText.trim()) {
+          toast.error("Please write a proposal.");
+          return;
+        }
 
-      // 10. Submit on-chain
-      await applyForJob(jobId, proposalHash, proposalCID);
+        try {
+          const myPubKeyHex = await recoverPublicKey();
+          const existingPubKey = await readContracts.jobEscrow.encryptionPubKeys(address);
+          if (!existingPubKey || existingPubKey === "0x" || existingPubKey.toLowerCase() !== myPubKeyHex.toLowerCase()) {
+            toast.loading("Registering encryption key…", { id: "regkey" });
+            await registerEncryptionKey(myPubKeyHex);
+            toast.success("Encryption key registered!", { id: "regkey" });
+          }
 
-      // 11. Store proposal key locally ONLY after successful on-chain submission
-      storeProposalKey(jobId, address, proposalKeyHex);
+          const clientPubKeyHex: string = await readContracts.jobEscrow.encryptionPubKeys(job!.client);
+          if (!clientPubKeyHex || clientPubKeyHex === "0x") {
+            toast.error("Client has not registered an encryption key. Cannot encrypt proposal.");
+            return;
+          }
 
-      navigate(`/job/${jobId}`);
-    } catch (err) {
-      console.error("Apply error:", err);
-    }
-  }, [address, jobId, proposalText, experience, timeline, applyForJob, navigate, readContracts.jobEscrow, job, registerEncryptionKey]);
+          const proposal = {
+            applicant: address,
+            proposal: proposalText,
+            experience,
+            timeline,
+            submittedAt: Date.now(),
+          };
+          const proposalJSON = JSON.stringify(proposal);
+
+          const proposalKeyHex = await generateJobKey();
+          const encryptedBody = await encrypt(proposalJSON, proposalKeyHex);
+
+          const proposalKeyBytes = hexToBuffer(proposalKeyHex);
+          const wrappedForClient = await eciesEncrypt(proposalKeyBytes, clientPubKeyHex);
+          const myPubKey = await readContracts.jobEscrow.encryptionPubKeys(address);
+          const wrappedForFreelancer = await eciesEncrypt(proposalKeyBytes, myPubKey as string);
+
+          const envelope = {
+            version: 1,
+            encryptedBody: bufferToHex(encryptedBody),
+            wrappedKeyForClient: bufferToHex(wrappedForClient),
+            wrappedKeyForFreelancer: bufferToHex(wrappedForFreelancer),
+            freelancer: address,
+          };
+          const envelopeJSON = JSON.stringify(envelope);
+          const proposalHash = computeContentHash(proposalJSON);
+
+          try {
+            await readContracts.jobEscrow.applyForJob.estimateGas(
+              jobId, proposalHash, "QmPlaceholderDryRun",
+              { from: address }
+            );
+          } catch (dryRunErr) {
+            const msg = parseContractError(dryRunErr);
+            toast.error(`Transaction will fail: ${msg}`);
+            return;
+          }
+
+          toast.loading("Uploading proposal…", { id: "apply-stage" });
+          const envelopeBlob = new Blob([envelopeJSON], { type: "application/json" });
+          const proposalCID = await uploadFile(envelopeBlob, `proposal-job-${jobId}-${Date.now()}`);
+          toast.loading("Waiting for MetaMask…", { id: "apply-stage" });
+
+          await applyForJob(jobId, proposalHash, proposalCID);
+          storeProposalKey(jobId, address, proposalKeyHex);
+          toast.success("Application submitted!", { id: "apply-stage" });
+          navigate(`/job/${jobId}`);
+        } catch (err) {
+          toast.dismiss("apply-stage");
+          console.error("Apply error:", err);
+        }
+      },
+      () => toast("Request already in progress")
+    );
+  }, [address, jobId, proposalText, experience, timeline, applyForJob, navigate, readContracts.jobEscrow, job, registerEncryptionKey, runWithLock, applyLockKey]);
 
   if (!isConnected) {
     return (
@@ -211,10 +207,11 @@ export default function ApplyJob() {
 
           <TransactionButton
             onClick={handleApply}
-            isLoading={isLoading}
+            isLoading={isLoading || applyLocked}
             variant="primary"
+            disabled={applyLocked}
           >
-            <Send className="mr-1.5 h-4 w-4" /> Submit Application
+            <Send className="mr-1.5 h-4 w-4" /> {applyLocked ? "Uploading…" : "Submit Application"}
           </TransactionButton>
         </div>
       )}

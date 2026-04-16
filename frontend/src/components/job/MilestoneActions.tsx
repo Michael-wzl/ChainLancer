@@ -21,6 +21,7 @@ import { retrieveFromIPFS, retrieveBinaryFromIPFS, getGatewayUrl } from "../../i
 import { getJobKey } from "../../utils/storage";
 import type { MilestoneData, JobData } from "../../hooks/useJobList";
 import toast from "react-hot-toast";
+import { useSingleFlight } from "../../hooks/useSingleFlight";
 
 interface MilestoneActionsProps {
   job: JobData;
@@ -54,6 +55,7 @@ export function MilestoneActions({
   const [deliverableContent, setDeliverableContent] = useState<string | null>(null);
   const [deliverableLoading, setDeliverableLoading] = useState(false);
   const [deliverableError, setDeliverableError] = useState<string | null>(null);
+  const { runWithLock, isLocked } = useSingleFlight();
 
   const isClient = userAddress?.toLowerCase() === job.client.toLowerCase();
   const isFreelancer = userAddress?.toLowerCase() === job.freelancer.toLowerCase();
@@ -75,6 +77,8 @@ export function MilestoneActions({
     milestone.deliverableCID &&
     milestone.deliverableCID.length > 0 &&
     milestone.status !== MilestoneStatus.Pending;
+  const submitLockKey = `submit-ms:${job.jobId}:${milestoneIdx}:${userAddress ?? "disconnected"}`;
+  const submitLocked = isLocked(submitLockKey);
 
   // ─── View Deliverable ───
   const handleViewDeliverable = useCallback(async () => {
@@ -131,37 +135,42 @@ export function MilestoneActions({
 
   // ─── Freelancer: Submit Milestone ───
   const handleSubmit = async () => {
-    if (!deliverableText.trim()) {
-      toast.error("Please enter deliverable content");
-      return;
-    }
+    return runWithLock(
+      submitLockKey,
+      async () => {
+        if (!deliverableText.trim()) {
+          toast.error("Please enter deliverable content");
+          return;
+        }
 
-    try {
-      const jobKey = getJobKey(job.jobId, userAddress ?? undefined);
+        try {
+          const jobKey = getJobKey(job.jobId, userAddress ?? undefined);
 
-      // Block submission if no encryption key is available — uploading
-      // plaintext deliverables to IPFS would be a privacy leak.
-      if (!jobKey) {
-        toast.error(
-          "No encryption key found for this job. Cannot submit deliverable without it. " +
-          "Try viewing the Job Agreement first to restore the key, or check if you have the key stored locally."
-        );
-        return;
-      }
+          if (!jobKey) {
+            toast.error(
+              "No encryption key found for this job. Cannot submit deliverable without it. " +
+              "Try viewing the Job Agreement first to restore the key, or check if you have the key stored locally."
+            );
+            return;
+          }
 
-      // SC-3 fix: Hash the plaintext BEFORE encrypting so the on-chain hash
-      // matches the actual deliverable content, not the ciphertext.
-      const deliverableHash = computeContentHash(deliverableText);
-      const contentBytes = await encrypt(deliverableText, jobKey);
-      const blob = new Blob([contentBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
-      const cid = await uploadFile(blob, `job-${job.jobId}-ms-${milestoneIdx}`);
-      await submitMilestone(job.jobId, milestoneIdx, deliverableHash, cid);
-      setShowSubmitForm(false);
-      setDeliverableText("");
-      onRefresh();
-    } catch {
-      // Error handled by hook
-    }
+          toast.loading("Uploading deliverable…", { id: "submit-milestone-stage" });
+          const deliverableHash = computeContentHash(deliverableText);
+          const contentBytes = await encrypt(deliverableText, jobKey);
+          const blob = new Blob([contentBytes.buffer as ArrayBuffer], { type: "application/octet-stream" });
+          const cid = await uploadFile(blob, `job-${job.jobId}-ms-${milestoneIdx}`);
+          toast.loading("Waiting for MetaMask…", { id: "submit-milestone-stage" });
+          await submitMilestone(job.jobId, milestoneIdx, deliverableHash, cid);
+          toast.success("Milestone submitted for review!", { id: "submit-milestone-stage" });
+          setShowSubmitForm(false);
+          setDeliverableText("");
+          onRefresh();
+        } catch {
+          toast.dismiss("submit-milestone-stage");
+        }
+      },
+      () => toast("Request already in progress")
+    );
   };
 
   if (job.state !== JobState.Active) return null;
@@ -192,10 +201,11 @@ export function MilestoneActions({
               <div className="flex gap-2">
                 <TransactionButton
                   onClick={handleSubmit}
-                  isLoading={isLoading}
+                  isLoading={isLoading || submitLocked}
                   variant="success"
+                  disabled={submitLocked}
                 >
-                  <Upload className="mr-1.5 h-4 w-4" /> Submit Milestone
+                  <Upload className="mr-1.5 h-4 w-4" /> {submitLocked ? "Uploading…" : "Submit Milestone"}
                 </TransactionButton>
                 <button
                   onClick={() => setShowSubmitForm(false)}
@@ -209,6 +219,7 @@ export function MilestoneActions({
             <TransactionButton
               onClick={() => setShowSubmitForm(true)}
               variant="primary"
+              disabled={submitLocked}
             >
               <Upload className="mr-1.5 h-4 w-4" /> Submit Deliverable
             </TransactionButton>

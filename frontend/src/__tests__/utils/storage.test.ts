@@ -10,12 +10,17 @@
  * - Handles localStorage failures gracefully
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   storeJobKey,
   getJobKey,
   removeJobKey,
   getAllJobKeys,
+  storePendingJobKey,
+  getPendingJobKey,
+  clearPendingJobKey,
+  listPendingJobKeys,
+  PENDING_JOB_KEY_TTL_MS,
 } from "../../utils/storage";
 
 const ALICE = "0xAliceAddress1234567890123456789012345678";
@@ -24,6 +29,12 @@ const BOB = "0xBobAddress00001234567890123456789012345678";
 describe("utils/storage", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("storeJobKey / getJobKey (per-address)", () => {
@@ -141,6 +152,81 @@ describe("utils/storage", () => {
       const allKeys = getAllJobKeys(ALICE);
       expect(Object.keys(allKeys).length).toBe(1);
       expect(allKeys["1"]).toBe("key_a");
+    });
+  });
+
+  describe("pending job key drafts", () => {
+    it("should store and retrieve a pending job key draft", () => {
+      storePendingJobKey({
+        tempId: "draft-1",
+        jobKeyHex: "abc123",
+        title: "Draft job",
+        agreementHash: "0xhash",
+        createdBy: ALICE,
+        createdAt: Date.now(),
+      });
+
+      expect(getPendingJobKey("draft-1")).toEqual({
+        tempId: "draft-1",
+        jobKeyHex: "abc123",
+        title: "Draft job",
+        agreementHash: "0xhash",
+        createdBy: ALICE,
+        createdAt: Date.now(),
+      });
+    });
+
+    it("should list pending drafts for a specific creator", () => {
+      storePendingJobKey({
+        tempId: "draft-a",
+        jobKeyHex: "key-a",
+        title: "Alice draft",
+        agreementHash: "0xaaa",
+        createdBy: ALICE,
+        createdAt: Date.now(),
+      });
+      storePendingJobKey({
+        tempId: "draft-b",
+        jobKeyHex: "key-b",
+        title: "Bob draft",
+        agreementHash: "0xbbb",
+        createdBy: BOB,
+        createdAt: Date.now(),
+      });
+
+      const aliceDrafts = listPendingJobKeys(ALICE);
+      expect(aliceDrafts).toHaveLength(1);
+      expect(aliceDrafts[0]?.tempId).toBe("draft-a");
+    });
+
+    it("should clear pending drafts", () => {
+      storePendingJobKey({
+        tempId: "draft-clear",
+        jobKeyHex: "deadbeef",
+        title: "Clear me",
+        agreementHash: "0xccc",
+        createdBy: ALICE,
+        createdAt: Date.now(),
+      });
+
+      clearPendingJobKey("draft-clear");
+      expect(getPendingJobKey("draft-clear")).toBeNull();
+    });
+
+    it("should expire pending drafts after the TTL", () => {
+      storePendingJobKey({
+        tempId: "draft-expired",
+        jobKeyHex: "facefeed",
+        title: "Old draft",
+        agreementHash: "0xddd",
+        createdBy: ALICE,
+        createdAt: Date.now(),
+      });
+
+      vi.advanceTimersByTime(PENDING_JOB_KEY_TTL_MS + 1);
+
+      expect(getPendingJobKey("draft-expired")).toBeNull();
+      expect(listPendingJobKeys(ALICE)).toHaveLength(0);
     });
   });
 });
