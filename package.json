@@ -7,7 +7,9 @@
     "test": "hardhat test",
     "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
     "deploy:base-sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
-    "verify:base-sepolia": "hardhat run scripts/verify.ts --network baseSepolia"
+    "verify:base-sepolia": "hardhat run scripts/verify.ts --network baseSepolia",
+    "audit:pinata": "ts-node scripts/audit-pinata-cids.ts",
+    "cleanup:pinata": "ts-node scripts/cleanup-orphan-pins.ts"
   },
   "repository": {
     "type": "git",
