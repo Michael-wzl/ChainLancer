@@ -3,6 +3,10 @@ import { ethers } from "ethers";
 import { useContracts } from "../contexts/ContractContext";
 import { JobState, MilestoneStatus } from "../config/constants";
 
+const NEXT_JOB_ID_RETRIES = 2;
+const JOB_FETCH_RETRIES = 2;
+const RETRY_DELAY_MS = 300;
+
 // ─── Types ───
 
 export interface JobData {
@@ -44,6 +48,11 @@ export interface ApplicationData {
   appliedAt: number;
 }
 
+interface FetchSingleJobOptions {
+  retries?: number;
+  onRetry?: (attempt: number, error: unknown) => void;
+}
+
 /**
  * Hook to fetch and manage a list of jobs.
  */
@@ -52,22 +61,56 @@ export function useJobList() {
   const [jobs, setJobs] = useState<JobData[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalJobs, setTotalJobs] = useState(0);
+  const [hasPartialFailures, setHasPartialFailures] = useState(false);
+  const [failedJobIds, setFailedJobIds] = useState<number[]>([]);
 
   const fetchJobs = useCallback(async () => {
     if (!readContracts.jobEscrow) return;
     setLoading(true);
+    setHasPartialFailures(false);
+    setFailedJobIds([]);
     try {
-      const nextJobId = await readContracts.jobEscrow.nextJobId();
+      const nextJobId = await retryRpcCall(
+        () => readContracts.jobEscrow!.nextJobId(),
+        NEXT_JOB_ID_RETRIES,
+        "Failed to fetch next job id",
+      );
       const total = Number(nextJobId);
       setTotalJobs(total);
 
-      const jobPromises: Promise<JobData | null>[] = [];
-      for (let i = 0; i < total; i++) {
-        jobPromises.push(fetchSingleJob(readContracts.jobEscrow, i));
-      }
+      const jobPromises: Promise<JobData | null>[] = Array.from(
+        { length: total },
+        (_, jobId) =>
+          fetchSingleJob(readContracts.jobEscrow!, jobId, {
+            retries: JOB_FETCH_RETRIES,
+            onRetry: (attempt, error) => {
+              console.warn(
+                `Retrying fetch for job ${jobId} (attempt ${attempt + 1})`,
+                error,
+              );
+            },
+          }),
+      );
 
-      const results = await Promise.all(jobPromises);
-      setJobs(results.filter((j): j is JobData => j !== null).reverse());
+      const results = await Promise.allSettled(jobPromises);
+      const nextJobs: JobData[] = [];
+      const nextFailedJobIds: number[] = [];
+
+      results.forEach((result, jobId) => {
+        if (result.status === "fulfilled") {
+          if (result.value) {
+            nextJobs.push(result.value);
+          }
+          return;
+        }
+
+        nextFailedJobIds.push(jobId);
+        console.warn(`Failed to fetch job ${jobId} after retries`, result.reason);
+      });
+
+      setJobs(nextJobs.reverse());
+      setHasPartialFailures(nextFailedJobIds.length > 0);
+      setFailedJobIds(nextFailedJobIds);
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
     } finally {
@@ -79,7 +122,14 @@ export function useJobList() {
     fetchJobs();
   }, [fetchJobs]);
 
-  return { jobs, loading, totalJobs, refresh: fetchJobs };
+  return {
+    jobs,
+    loading,
+    totalJobs,
+    hasPartialFailures,
+    failedJobIds,
+    refresh: fetchJobs,
+  };
 }
 
 /**
@@ -97,7 +147,9 @@ export function useJobDetail(jobId: number | null) {
     setLoading(true);
     try {
       const [jobData, msData, appData] = await Promise.all([
-        fetchSingleJob(readContracts.jobEscrow, jobId),
+        fetchSingleJob(readContracts.jobEscrow, jobId, {
+          retries: JOB_FETCH_RETRIES,
+        }),
         readContracts.jobEscrow.getMilestones(jobId),
         readContracts.jobEscrow.getApplications(jobId),
       ]);
@@ -144,51 +196,98 @@ export function useJobDetail(jobId: number | null) {
 async function fetchSingleJob(
   contract: import("ethers").Contract,
   jobId: number,
+  options: FetchSingleJobOptions = {},
 ): Promise<JobData | null> {
-  try {
-    const info = await contract.getJobInfo(jobId);
-    const raw = await contract.jobs(jobId);
+  const retries = options.retries ?? 0;
 
-    const client = info[0] as string;
-
-    // Bug #1 fix: Solidity mappings return default zero values for non-existent keys.
-    // If the client address is the zero address, this job doesn't exist.
-    if (client === ethers.ZeroAddress) {
-      return null;
-    }
-
-    // BUG-001/002/003 fix: fetch cancellation request state
-    let cancellationRequested = false;
-    let cancellationRequestor: string | null = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const cancelReq = await contract.cancelRequests(jobId);
-      cancellationRequested = cancelReq.active as boolean;
-      if (cancellationRequested) {
-        cancellationRequestor = cancelReq.requestedBy as string;
+      return await fetchSingleJobOnce(contract, jobId);
+    } catch (error) {
+      if (attempt === retries) {
+        throw error;
       }
-    } catch {
-      // cancelRequests may not exist on older contract versions; ignore
-    }
 
-    return {
-      jobId,
-      client,
-      freelancer: info[1] as string,
-      state: Number(info[2]) as JobState,
-      totalValue: info[3] as bigint,
-      freelancerDeposit: info[4] as bigint,
-      behaviorBond: info[5] as bigint,
-      reviewTimeout: Number(info[6]),
-      agreementHash: raw.agreementHash as string,
-      createdAt: Number(BigInt(raw.createdAt)),
-      selectedAt: Number(BigInt(raw.selectedAt)),
-      activatedAt: Number(BigInt(raw.activatedAt)),
-      milestoneCount: Number(BigInt(raw.milestoneCount)),
-      milestonesCompleted: Number(BigInt(raw.milestonesCompleted)),
-      cancellationRequested,
-      cancellationRequestor,
-    };
-  } catch {
+      options.onRetry?.(attempt, error);
+      await delay(RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  return null;
+}
+
+async function fetchSingleJobOnce(
+  contract: import("ethers").Contract,
+  jobId: number,
+): Promise<JobData | null> {
+  const info = await contract.getJobInfo(jobId);
+  const raw = await contract.jobs(jobId);
+
+  const client = info[0] as string;
+
+  // Bug #1 fix: Solidity mappings return default zero values for non-existent keys.
+  // If the client address is the zero address, this job doesn't exist.
+  if (client === ethers.ZeroAddress) {
     return null;
   }
+
+  // BUG-001/002/003 fix: fetch cancellation request state
+  let cancellationRequested = false;
+  let cancellationRequestor: string | null = null;
+  try {
+    const cancelReq = await contract.cancelRequests(jobId);
+    cancellationRequested = cancelReq.active as boolean;
+    if (cancellationRequested) {
+      cancellationRequestor = cancelReq.requestedBy as string;
+    }
+  } catch {
+    // cancelRequests may not exist on older contract versions; ignore
+  }
+
+  return {
+    jobId,
+    client,
+    freelancer: info[1] as string,
+    state: Number(info[2]) as JobState,
+    totalValue: info[3] as bigint,
+    freelancerDeposit: info[4] as bigint,
+    behaviorBond: info[5] as bigint,
+    reviewTimeout: Number(info[6]),
+    agreementHash: raw.agreementHash as string,
+    createdAt: Number(BigInt(raw.createdAt)),
+    selectedAt: Number(BigInt(raw.selectedAt)),
+    activatedAt: Number(BigInt(raw.activatedAt)),
+    milestoneCount: Number(BigInt(raw.milestoneCount)),
+    milestonesCompleted: Number(BigInt(raw.milestonesCompleted)),
+    cancellationRequested,
+    cancellationRequestor,
+  };
+}
+
+async function retryRpcCall<T>(
+  operation: () => Promise<T>,
+  retries: number,
+  label: string,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) {
+        break;
+      }
+
+      console.warn(`${label} (attempt ${attempt + 1})`, error);
+      await delay(RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
